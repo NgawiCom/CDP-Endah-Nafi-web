@@ -52,6 +52,13 @@ const directions = [
 ];
 
 const directionsByLabel = new Map(directions.map((direction) => [direction.label, direction]));
+const API_BASE_URL =
+  window.ECHO_API_BASE_URL ||
+  (window.location.hostname === "127.0.0.1" && window.location.port === "8000"
+    ? "/api"
+    : "http://127.0.0.1:8000/api");
+const TRACKING_SNAPSHOT_INTERVAL_MS = 2500;
+const PATIENT_SEARCH_DEBOUNCE_MS = 250;
 
 const state = {
   startedAt: Date.now(),
@@ -85,13 +92,21 @@ const state = {
   lastFeatures: null,
   lastCanvasMap: null,
   output: "MENUNGGU",
-  logs: [
-    ["22:19:08", "Sesi", "Dashboard siap. Aktifkan kamera untuk tracking asli.", "ok"],
-    ["22:18:54", "Tracking", "Menunggu feed kamera pasien", "warn"],
-    ["22:18:31", "Perangkat", "Speaker volume rendah", "warn"],
-    ["22:17:42", "Kalibrasi", "Gunakan B / C / T seperti program Python", "ok"],
-    ["22:16:03", "Sesi", "Monitoring dimulai untuk ICU Bed A12", "ok"],
-  ],
+  backend: {
+    initializing: false,
+    initPromise: null,
+    online: false,
+    disabled: false,
+    errorLogged: false,
+    patientId: null,
+    sessionId: null,
+    lastSnapshotAt: 0,
+    activePatient: null,
+    calibrationSaved: false,
+    pendingStartProfile: null,
+    searchTimer: 0,
+  },
+  logs: [],
 };
 
 const elements = {
@@ -132,6 +147,26 @@ const elements = {
   calibrationBanner: document.querySelector("[data-calibration-banner]"),
   calibrationTitle: document.querySelector("[data-calibration-title]"),
   calibrationDetail: document.querySelector("[data-calibration-detail]"),
+  patientSearchInput: document.querySelector("[data-patient-search-input]"),
+  patientSearchResults: document.querySelector("[data-patient-search-results]"),
+  patientProfileForm: document.querySelector("[data-patient-profile-form]"),
+  profileName: document.querySelector("[data-profile-name]"),
+  profileGender: document.querySelector("[data-profile-gender]"),
+  profileNik: document.querySelector("[data-profile-nik]"),
+  profileSaveNote: document.querySelector("[data-profile-save-note]"),
+  profileSection: document.querySelector("[data-profile-section]"),
+  profileSaveStatus: document.querySelector("[data-profile-save-status]"),
+  profileInitials: document.querySelector("[data-profile-initials]"),
+  profileDisplayName: document.querySelector("[data-profile-display-name]"),
+  profileDisplayMeta: document.querySelector("[data-profile-display-meta]"),
+  profileDetailName: document.querySelector("[data-profile-detail-name]"),
+  profileDetailGender: document.querySelector("[data-profile-detail-gender]"),
+  profileDetailNik: document.querySelector("[data-profile-detail-nik]"),
+  profileBackendStatus: document.querySelector("[data-profile-backend-status]"),
+  savedCalibrationTop: document.querySelector("[data-saved-calibration-top]"),
+  savedCalibrationCenter: document.querySelector("[data-saved-calibration-center]"),
+  savedCalibrationBottom: document.querySelector("[data-saved-calibration-bottom]"),
+  savedCalibrationThreshold: document.querySelector("[data-saved-calibration-threshold]"),
 };
 
 let faceMesh = null;
@@ -236,6 +271,510 @@ function setWidth(element, value) {
   }
 }
 
+function numberOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+function formatSavedNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(3) : "-";
+}
+
+function getInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!parts.length) {
+    return "--";
+  }
+
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("");
+}
+
+function apiUrl(path) {
+  return `${API_BASE_URL}${path}`;
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(apiUrl(path), {
+    method: options.method || "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    keepalive: Boolean(options.keepalive),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Request backend gagal (${response.status})`);
+  }
+
+  return payload;
+}
+
+function reportBackendError(error) {
+  if (state.backend.errorLogged) {
+    return;
+  }
+
+  state.backend.errorLogged = true;
+  addLog("Backend", `Penyimpanan data belum aktif: ${error.message}`, "warn");
+}
+
+function setActivePatient(patient, calibrationSaved = Boolean(patient && patient.has_calibration)) {
+  state.backend.activePatient = patient;
+  state.backend.patientId = patient ? patient.id : null;
+  state.backend.calibrationSaved = calibrationSaved;
+  renderActivePatientProfile();
+
+  if (patient) {
+    if (elements.profileName) {
+      elements.profileName.value = patient.name || "";
+    }
+    if (elements.profileGender) {
+      elements.profileGender.value = patient.gender || "";
+    }
+    if (elements.profileNik) {
+      elements.profileNik.value = patient.nik || "";
+    }
+    setText(elements.messageTime, `Profil aktif: ${patient.name} / ${patient.nik}`);
+  }
+}
+
+function renderActivePatientProfile() {
+  const patient = state.backend.activePatient;
+  const calibrationData = patient && patient.calibration_data;
+  const profile = state.profile || calibrationData?.profile || null;
+  const coordinates = calibrationData?.coordinates || profile || {};
+  const thresholds = calibrationData?.thresholds || {};
+  const hasCalibration = Boolean(state.backend.calibrationSaved || patient?.has_calibration || profile);
+  const sessionText = state.backend.sessionId ? `Tersimpan / sesi #${state.backend.sessionId}` : "Profil tersimpan";
+
+  if (!patient) {
+    elements.profileSaveStatus.className = "status-badge warning";
+    setText(elements.profileSaveStatus, "Belum dipilih");
+    setText(elements.profileInitials, "--");
+    setText(elements.profileDisplayName, "Belum ada pasien aktif");
+    setText(elements.profileDisplayMeta, "Pilih pasien dari sidebar atau simpan hasil kalibrasi baru.");
+    setText(elements.profileDetailName, "-");
+    setText(elements.profileDetailGender, "-");
+    setText(elements.profileDetailNik, "-");
+    setText(elements.profileBackendStatus, "Belum tersimpan");
+    setText(elements.savedCalibrationTop, "-");
+    setText(elements.savedCalibrationCenter, "-");
+    setText(elements.savedCalibrationBottom, "-");
+    setText(elements.savedCalibrationThreshold, "-");
+    return;
+  }
+
+  elements.profileSaveStatus.className = hasCalibration ? "status-badge safe" : "status-badge warning";
+  setText(elements.profileSaveStatus, hasCalibration ? "Kalibrasi tersimpan" : "Belum ada kalibrasi");
+  setText(elements.profileInitials, getInitials(patient.name));
+  setText(elements.profileDisplayName, patient.name || "-");
+  setText(
+    elements.profileDisplayMeta,
+    `${patient.gender || "-"} / NIK ${patient.nik || "-"}`
+  );
+  setText(elements.profileDetailName, patient.name || "-");
+  setText(elements.profileDetailGender, patient.gender || "-");
+  setText(elements.profileDetailNik, patient.nik || "-");
+  setText(elements.profileBackendStatus, sessionText);
+  setText(elements.savedCalibrationTop, formatSavedNumber(coordinates.top));
+  setText(elements.savedCalibrationCenter, formatSavedNumber(coordinates.center));
+  setText(elements.savedCalibrationBottom, formatSavedNumber(coordinates.bottom));
+  setText(
+    elements.savedCalibrationThreshold,
+    `${formatSavedNumber(thresholds.upper ?? profile?.upperThreshold)} / ${formatSavedNumber(
+      thresholds.lower ?? profile?.lowerThreshold
+    )} / ${formatSavedNumber(thresholds.closed ?? profile?.closedThreshold)}`
+  );
+}
+
+function showProfileSection() {
+  if (!elements.profileSection) {
+    return;
+  }
+
+  elements.profileSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  history.replaceState(null, "", "#profile");
+}
+
+function serializeCalibrationData(profile = state.profile) {
+  return {
+    version: 1,
+    captured_at: new Date().toISOString(),
+    source: "browser-dashboard",
+    coordinates: {
+      top: profile ? profile.top : null,
+      center: profile ? profile.center : null,
+      bottom: profile ? profile.bottom : null,
+    },
+    thresholds: {
+      upper: profile ? profile.upperThreshold : null,
+      lower: profile ? profile.lowerThreshold : null,
+      closed: profile ? profile.closedThreshold : null,
+    },
+    profile,
+    samples: {
+      top: [...state.calibration.samples.top],
+      center: [...state.calibration.samples.center],
+      bottom: [...state.calibration.samples.bottom],
+    },
+    openEyeGaps: [...state.calibration.openEyeGaps],
+  };
+}
+
+function normalizeCalibrationProfile(profile) {
+  if (!profile) {
+    return null;
+  }
+
+  const normalized = {
+    top: Number(profile.top),
+    center: Number(profile.center),
+    bottom: Number(profile.bottom),
+    upperThreshold: Number(profile.upperThreshold ?? profile.upper_threshold ?? profile.thresholds?.upper),
+    lowerThreshold: Number(profile.lowerThreshold ?? profile.lower_threshold ?? profile.thresholds?.lower),
+    closedThreshold: Number(profile.closedThreshold ?? profile.closed_threshold ?? profile.thresholds?.closed),
+    orderedAutomatically: Boolean(profile.orderedAutomatically ?? profile.ordered_automatically),
+    range: Number(profile.range ?? Number(profile.bottom) - Number(profile.top)),
+  };
+
+  return Object.values(normalized).some((value) => typeof value === "number" && !Number.isFinite(value))
+    ? null
+    : normalized;
+}
+
+function applyPatientCalibration(patient) {
+  const calibrationData = patient.calibration_data;
+  if (!calibrationData) {
+    throw new Error("Profil pasien belum punya data kalibrasi.");
+  }
+
+  const samples = calibrationData.samples || {};
+  state.calibration = createCalibrationState(`Profil ${patient.name} dimuat. Kalibrasi tersimpan aktif.`);
+  state.calibration.samples = {
+    top: Array.isArray(samples.top) ? samples.top.map(Number).filter(Number.isFinite) : [],
+    center: Array.isArray(samples.center) ? samples.center.map(Number).filter(Number.isFinite) : [],
+    bottom: Array.isArray(samples.bottom) ? samples.bottom.map(Number).filter(Number.isFinite) : [],
+  };
+  state.calibration.openEyeGaps = Array.isArray(calibrationData.openEyeGaps)
+    ? calibrationData.openEyeGaps.map(Number).filter(Number.isFinite)
+    : Array.isArray(calibrationData.open_eye_gaps)
+      ? calibrationData.open_eye_gaps.map(Number).filter(Number.isFinite)
+      : [];
+
+  state.profile =
+    normalizeCalibrationProfile(calibrationData.profile) ||
+    normalizeCalibrationProfile({
+      ...(calibrationData.coordinates || {}),
+      thresholds: calibrationData.thresholds,
+    }) ||
+    buildProfile();
+
+  if (!state.profile) {
+    throw new Error("Data kalibrasi pasien tidak lengkap.");
+  }
+
+  state.mode = "running";
+  state.directionHistory = [];
+  state.stableDirection = "-";
+  state.lastProgramDirection = "-";
+  resetBlinkState();
+  setActivePatient(patient, true);
+  updateCalibrationBanner();
+  updateDashboard(state.lastFeatures, "PROFIL DIMUAT", "-", state.lastEyeState, state.lastConfidence);
+}
+
+async function openSessionForPatient(patient, notes = "Sesi dibuat dari profil pasien.") {
+  if (!patient || state.backend.disabled) {
+    return null;
+  }
+
+  if (state.backend.sessionId && state.backend.patientId === patient.id) {
+    return state.backend.sessionId;
+  }
+
+  closeBackendSession();
+  state.backend.initializing = true;
+
+  try {
+    const sessionResult = await apiRequest(`/patients/${patient.id}/sessions`, {
+      method: "POST",
+      body: {
+        source: "browser-dashboard",
+        device_label: navigator.userAgent,
+        notes,
+      },
+    });
+
+    state.backend.online = true;
+    state.backend.sessionId = sessionResult.session.id;
+    state.backend.patientId = patient.id;
+    renderActivePatientProfile();
+    return state.backend.sessionId;
+  } catch (error) {
+    state.backend.online = false;
+    reportBackendError(error);
+    return null;
+  } finally {
+    state.backend.initializing = false;
+  }
+}
+
+async function storeBackendEvent(event) {
+  if (state.backend.disabled || !state.backend.sessionId) {
+    return;
+  }
+
+  try {
+    await apiRequest(`/sessions/${state.backend.sessionId}/tracking-events`, {
+      method: "POST",
+      body: {
+        captured_at: new Date().toISOString(),
+        ...event,
+      },
+    });
+  } catch (error) {
+    state.backend.online = false;
+    reportBackendError(error);
+  }
+}
+
+function storeMessageEvent(message, source, status) {
+  storeBackendEvent({
+    event_type: "message",
+    gaze_direction: state.lastDisplayDirection,
+    program_direction: state.lastProgramDirection,
+    eye_state: state.lastEyeState,
+    confidence: state.lastConfidence,
+    blink_count: state.blinkCount,
+    click_status: state.clickStatus,
+    output_message: message,
+    metadata: {
+      source,
+      status,
+      mode: state.mode,
+    },
+  });
+}
+
+function storeTrackingSnapshot(features, displayDirection, programDirection, eyeState, confidence, nowMs) {
+  if (nowMs - state.backend.lastSnapshotAt < TRACKING_SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+
+  state.backend.lastSnapshotAt = nowMs;
+  storeBackendEvent({
+    event_type: "snapshot",
+    gaze_direction: displayDirection,
+    program_direction: programDirection,
+    eye_state: eyeState,
+    confidence,
+    eye_gap: features ? numberOrNull(features.eyeGap) : null,
+    gaze_ratio: features ? numberOrNull(features.gazeRatio) : null,
+    fps: numberOrNull(state.fps),
+    latency_ms: numberOrNull(state.latency),
+    blink_count: state.blinkCount,
+    click_status: state.clickStatus,
+    output_message: state.output,
+    metadata: {
+      mode: state.mode,
+      face_visible: Boolean(features),
+      stable_direction: state.stableDirection,
+    },
+  });
+}
+
+function closeBackendSession() {
+  if (!state.backend.sessionId || state.backend.disabled) {
+    return;
+  }
+
+  fetch(apiUrl(`/sessions/${state.backend.sessionId}`), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      status: "closed",
+      ended_at: new Date().toISOString(),
+    }),
+    keepalive: true,
+  }).catch(() => {});
+  state.backend.sessionId = null;
+}
+
+function showPatientProfileForm() {
+  const patient = state.backend.activePatient;
+  if (patient) {
+    elements.profileName.value = patient.name || "";
+    elements.profileGender.value = patient.gender || "";
+    elements.profileNik.value = patient.nik || "";
+  }
+  setText(
+    elements.profileSaveNote,
+    patient
+      ? "Data kalibrasi baru akan menggantikan kalibrasi tersimpan untuk pasien ini."
+      : "Isi profil pasien lalu klik Simpan Kalibrasi di panel kanan."
+  );
+  showProfileSection();
+
+  if (elements.profileName) {
+    elements.profileName.focus();
+  }
+}
+
+function hidePatientProfileForm() {
+  setText(elements.profileSaveNote, "Data kalibrasi disimpan manual setelah profil diisi.");
+}
+
+function renderPatientSearchResults(patients) {
+  if (!elements.patientSearchResults) {
+    return;
+  }
+
+  if (!patients.length) {
+    elements.patientSearchResults.innerHTML = "<p>Pasien tidak ditemukan.</p>";
+    return;
+  }
+
+  elements.patientSearchResults.innerHTML = patients
+    .map((patient) => {
+      const calibrationLabel = patient.has_calibration ? "Kalibrasi tersimpan" : "Belum ada kalibrasi";
+      return `
+        <button class="patient-result-button" type="button" data-patient-id="${patient.id}">
+          <strong>${escapeHtml(patient.name || "Tanpa nama")}</strong>
+          <span>${escapeHtml(patient.nik || "-")} / ${escapeHtml(patient.gender || "-")}</span>
+          <span>${calibrationLabel}</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+async function searchPatients(query = "") {
+  if (!elements.patientSearchResults) {
+    return;
+  }
+
+  elements.patientSearchResults.innerHTML = "<p>Mencari pasien...</p>";
+
+  try {
+    const payload = await apiRequest(`/patients?q=${encodeURIComponent(query)}`);
+    renderPatientSearchResults(payload.patients || []);
+  } catch (error) {
+    elements.patientSearchResults.innerHTML = "<p>Backend belum aktif.</p>";
+    reportBackendError(error);
+  }
+}
+
+function schedulePatientSearch() {
+  clearTimeout(state.backend.searchTimer);
+  state.backend.searchTimer = window.setTimeout(() => {
+    searchPatients(elements.patientSearchInput.value);
+  }, PATIENT_SEARCH_DEBOUNCE_MS);
+}
+
+function activateProgram(message = "Program E mulai") {
+  state.mode = "running";
+  state.output = message.toUpperCase();
+  state.directionHistory = [];
+  state.lastProgramDirection = "-";
+  resetBlinkState();
+  setMessage(message, "Sesi", "ok");
+
+  if (state.profile && state.profile.orderedAutomatically) {
+    addLog("Kalibrasi", "Urutan nilai kalibrasi diperbaiki otomatis", "warn");
+  }
+
+  updateCalibrationBanner();
+}
+
+async function savePatientCalibration() {
+  const profile = state.backend.pendingStartProfile || buildProfile();
+  if (!profile) {
+    setText(elements.profileSaveNote, "Kalibrasi belum lengkap. Ambil data Bawah, Tengah, dan Atas dulu.");
+    addLog("Kalibrasi", "Data kalibrasi belum lengkap, profil belum disimpan", "warn");
+    return;
+  }
+
+  const name = elements.profileName.value.trim();
+  const gender = elements.profileGender.value;
+  const nik = elements.profileNik.value.trim();
+
+  if (!name || !gender || !nik) {
+    setText(elements.profileSaveNote, "Nama, jenis kelamin, dan NIK wajib diisi.");
+    return;
+  }
+
+  const submitButton = elements.patientProfileForm.querySelector('button[type="submit"]');
+  if (submitButton) {
+    submitButton.disabled = true;
+  }
+  setText(elements.profileSaveNote, "Menyimpan profil dan data kalibrasi ke backend...");
+
+  try {
+    state.profile = profile;
+    const payload = await apiRequest("/patients", {
+      method: "POST",
+      body: {
+        patient_code: `NIK-${nik}`,
+        name,
+        gender,
+        nik,
+        room: "",
+        bed: "",
+        notes: "Data dibuat dari form profil pasien dashboard E.C.H.O.",
+        calibration_data: serializeCalibrationData(profile),
+      },
+    });
+    const patient = payload.patient;
+    setActivePatient(patient, true);
+    const sessionId = await openSessionForPatient(patient, "Sesi dibuat setelah kalibrasi baru disimpan.");
+    if (!sessionId) {
+      throw new Error("Profil tersimpan, tetapi sesi tracking belum bisa dibuat.");
+    }
+    state.backend.pendingStartProfile = null;
+    setText(elements.profileSaveNote, "Kalibrasi tersimpan di backend. Tekan Mulai untuk menjalankan Program E.");
+    addLog("Backend", `Kalibrasi ${patient.name} tersimpan`, "ok");
+    updateCalibrationBanner();
+    showProfileSection();
+    searchPatients(elements.patientSearchInput ? elements.patientSearchInput.value : "");
+  } catch (error) {
+    setText(elements.profileSaveNote, error.message);
+    reportBackendError(error);
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+    }
+  }
+}
+
+async function loadPatientProfile(patientId) {
+  try {
+    const payload = await apiRequest(`/patients/${patientId}`);
+    const patient = payload.patient;
+    const sessionId = await openSessionForPatient(patient, "Sesi dibuat dari profil dengan kalibrasi tersimpan.");
+    if (!sessionId) {
+      throw new Error("Profil dimuat, tetapi sesi tracking belum bisa dibuat.");
+    }
+    applyPatientCalibration(patient);
+    setMessage(`Profil ${patient.name} dimuat`, "Cari Pasien", "ok");
+    showProfileSection();
+    sidebar.classList.remove("is-open");
+    document.body.classList.remove("menu-open");
+  } catch (error) {
+    addLog("Cari Pasien", error.message, "warn");
+  }
+}
+
 function syncCanvasSize() {
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
@@ -257,6 +796,10 @@ function addLog(event, detail, status = "ok") {
 }
 
 function renderLogs() {
+  if (!elements.logList) {
+    return;
+  }
+
   elements.logList.innerHTML = state.logs
     .map(([time, event, detail, status]) => {
       const label = status === "ok" ? "Normal" : status === "warn" ? "Perhatian" : "Alert";
@@ -286,6 +829,7 @@ function setMessage(message, source = "Pesan pasien", status = "ok") {
   setText(elements.outputText, message);
   setText(elements.messageTime, "Diterima baru saja");
   addLog(source, message, status);
+  storeMessageEvent(message, source, status);
 }
 
 function point(landmarks, index) {
@@ -406,6 +950,8 @@ async function startCalibrationTarget(target) {
   const now = performance.now() / 1000;
   state.mode = "calibration";
   state.profile = null;
+  state.backend.calibrationSaved = false;
+  state.backend.pendingStartProfile = null;
   state.directionHistory = [];
   state.stableDirection = "-";
   state.calibration.activeTarget = target;
@@ -426,6 +972,8 @@ function resetCalibration(message = "Kalibrasi diulang. Tekan B, C, atau T.") {
   state.stableDirection = "-";
   state.lastProgramDirection = "-";
   state.output = "MENUNGGU KALIBRASI";
+  state.backend.calibrationSaved = false;
+  state.backend.pendingStartProfile = null;
   resetBlinkState();
   setText(elements.outputText, "Menunggu input pasien");
   setText(elements.currentMessage, "Menunggu input pasien");
@@ -468,8 +1016,8 @@ function updateCalibration(features, now) {
   setText(elements.calibrationTime, "Baru saja");
 }
 
-function startProgram() {
-  state.profile = buildProfile();
+async function startProgram() {
+  state.profile = buildProfile() || (state.backend.calibrationSaved ? state.profile : null);
 
   if (!state.profile) {
     state.calibration.message = "Kalibrasi belum lengkap. Isi B, C, dan T dulu.";
@@ -478,18 +1026,19 @@ function startProgram() {
     return;
   }
 
-  state.mode = "running";
-  state.output = "PROGRAM E MULAI";
-  state.directionHistory = [];
-  state.lastProgramDirection = "-";
-  resetBlinkState();
-  setMessage("Program E mulai", "Sesi", "ok");
-
-  if (state.profile.orderedAutomatically) {
-    addLog("Kalibrasi", "Urutan nilai kalibrasi diperbaiki otomatis", "warn");
+  if (!state.backend.calibrationSaved) {
+    state.backend.pendingStartProfile = state.profile;
+    addLog("Backend", "Program belum mulai karena kalibrasi belum disimpan", "warn");
+    showPatientProfileForm();
+    setText(elements.profileSaveNote, "Kalibrasi belum tersimpan. Isi profil lalu klik Simpan Kalibrasi.");
+    return;
   }
 
-  updateCalibrationBanner();
+  if (state.backend.activePatient && !state.backend.sessionId) {
+    await openSessionForPatient(state.backend.activePatient, "Sesi dibuat dari kalibrasi tersimpan.");
+  }
+
+  activateProgram("Program E mulai");
 }
 
 function resetBlinkState() {
@@ -676,13 +1225,30 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
   updateActiveGazeMap(programDirection);
 }
 
+function updateCalibrationControls() {
+  // Disable calibration buttons when patient with saved calibration is loaded and running
+  const isPatientActive = Boolean(state.backend.activePatient && state.backend.calibrationSaved);
+  const shouldDisable = state.mode === "running" && isPatientActive;
+
+  document.querySelectorAll("[data-calibration-target], [data-reset-calibration]").forEach((button) => {
+    button.disabled = shouldDisable;
+    button.title = shouldDisable
+      ? `Profil pasien sedang aktif - Profil ${state.backend.activePatient.name}`
+      : "";
+    button.style.opacity = shouldDisable ? "0.5" : "1";
+    button.style.cursor = shouldDisable ? "not-allowed" : "pointer";
+  });
+}
+
 function updateCalibrationBanner() {
   if (state.mode === "running") {
     elements.calibrationBanner.classList.add("is-hidden");
+    updateCalibrationControls();
     return;
   }
 
   elements.calibrationBanner.classList.remove("is-hidden");
+  updateCalibrationControls();
   const completed = ["bottom", "center", "top"]
     .map((target) => `${TARGET_LABEL[target]}:${state.calibration.samples[target].length ? "OK" : "--"}`)
     .join("  ");
@@ -899,6 +1465,7 @@ function handleFaceResults(results) {
   updateDashboard(features, displayDirection, programDirection, eyeState, confidence);
   updateCalibrationBanner();
   drawTrackingView(results.image || video, features, displayDirection, programDirection, eyeState, confidence, now);
+  storeTrackingSnapshot(features, displayDirection, programDirection, eyeState, confidence, nowMs);
 }
 
 function getCanvasMap(source) {
@@ -988,7 +1555,7 @@ function drawCameraOverlays(features, map, displayDirection, programDirection, e
     drawTextBlock(
       [
         "MODE KALIBRASI - lihat sesuai tombol selama data diambil",
-        "B=bawah  C=center  T=atas  S=mulai Program E  R=ulang",
+        "B=bawah  C=center  T=atas  S=mulai setelah tersimpan  R=ulang",
         state.calibration.message,
         completed,
       ],
@@ -1087,6 +1654,13 @@ navLinks.forEach((link) => {
   link.addEventListener("click", () => {
     navLinks.forEach((item) => item.classList.remove("is-active"));
     link.classList.add("is-active");
+
+    if (link.hasAttribute("data-patient-search-toggle")) {
+      elements.patientSearchInput.focus();
+      searchPatients(elements.patientSearchInput.value);
+      return;
+    }
+
     sidebar.classList.remove("is-open");
     document.body.classList.remove("menu-open");
   });
@@ -1098,11 +1672,27 @@ document.querySelectorAll("[data-command]").forEach((button) => {
   });
 });
 
-document.querySelector("[data-clear-message]").addEventListener("click", () => {
-  setMessage("Menunggu input pasien", "Output");
-});
+const clearMessageButton = document.querySelector("[data-clear-message]");
+if (clearMessageButton) {
+  clearMessageButton.addEventListener("click", () => {
+    setMessage("Menunggu input pasien", "Output");
+  });
+}
 
 document.querySelector("[data-calibrate]").addEventListener("click", () => {
+  // Protect against accidental reset when patient profile is active
+  if (state.backend.activePatient && state.backend.calibrationSaved) {
+    const confirmed = confirm(
+      `Anda yakin ingin mulai kalibrasi baru untuk ${state.backend.activePatient.name}?\n\n` +
+      `Ini akan menghapus kalibrasi tersimpan saat ini.`
+    );
+    if (!confirmed) {
+      return;
+    }
+    // Clear active patient when resetting calibration
+    setActivePatient(null, false);
+  }
+  
   resetCalibration("Kalibrasi diulang. Tekan B, C, atau T.");
   startCamera();
   addLog("Kalibrasi", "Mode kalibrasi aktif", "ok");
@@ -1110,6 +1700,19 @@ document.querySelector("[data-calibrate]").addEventListener("click", () => {
 
 document.querySelectorAll("[data-calibration-target]").forEach((button) => {
   button.addEventListener("click", () => {
+    // Protect against accidental calibration when patient profile is active
+    if (state.backend.activePatient && state.backend.calibrationSaved && state.mode === "running") {
+      const confirmed = confirm(
+        `Profil ${state.backend.activePatient.name} sedang aktif.\n\n` +
+        `Mulai kalibrasi baru akan menghapus profil aktif saat ini. Lanjutkan?`
+      );
+      if (!confirmed) {
+        return;
+      }
+      // Clear active patient when starting new calibration
+      setActivePatient(null, false);
+    }
+    
     startCalibrationTarget(button.dataset.calibrationTarget);
   });
 });
@@ -1119,6 +1722,19 @@ document.querySelector("[data-start-program]").addEventListener("click", () => {
 });
 
 document.querySelector("[data-reset-calibration]").addEventListener("click", () => {
+  // Protect against accidental reset when patient profile is active
+  if (state.backend.activePatient && state.backend.calibrationSaved) {
+    const confirmed = confirm(
+      `Anda yakin ingin ulang kalibrasi untuk ${state.backend.activePatient.name}?\n\n` +
+      `Ini akan menghapus kalibrasi tersimpan dan memasuki mode kalibrasi baru.`
+    );
+    if (!confirmed) {
+      return;
+    }
+    // Clear active patient when resetting calibration
+    setActivePatient(null, false);
+  }
+  
   resetCalibration();
   startCamera();
   addLog("Kalibrasi", "Kalibrasi diulang", "ok");
@@ -1134,6 +1750,31 @@ cameraFullscreenButton.addEventListener("click", () => {
 
 document.addEventListener("fullscreenchange", handleCameraFullscreenChange);
 
+elements.patientSearchInput.addEventListener("focus", () => {
+  searchPatients(elements.patientSearchInput.value);
+});
+
+elements.patientSearchInput.addEventListener("input", schedulePatientSearch);
+
+elements.patientSearchResults.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target : event.target.parentElement;
+  const button = target ? target.closest("[data-patient-id]") : null;
+  if (!button) {
+    return;
+  }
+
+  loadPatientProfile(button.dataset.patientId);
+});
+
+elements.patientProfileForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  savePatientCalibration();
+});
+
+document.querySelectorAll("[data-close-patient-profile]").forEach((button) => {
+  button.addEventListener("click", hidePatientProfileForm);
+});
+
 window.addEventListener("resize", () => {
   const resized = syncCanvasSize();
 
@@ -1141,6 +1782,8 @@ window.addEventListener("resize", () => {
     drawIdleView();
   }
 });
+
+window.addEventListener("beforeunload", closeBackendSession);
 
 document.querySelector("[data-toggle-alert]").addEventListener("click", () => {
   state.muted = !state.muted;
@@ -1154,13 +1797,19 @@ document.querySelector("[data-toggle-alert]").addEventListener("click", () => {
   );
 });
 
-document.querySelector("[data-refresh-device]").addEventListener("click", () => {
-  addLog("Perangkat", "Status perangkat diperbarui", "ok");
-});
+const refreshDeviceButton = document.querySelector("[data-refresh-device]");
+if (refreshDeviceButton) {
+  refreshDeviceButton.addEventListener("click", () => {
+    addLog("Perangkat", "Status perangkat diperbarui", "ok");
+  });
+}
 
-document.querySelector("[data-export-log]").addEventListener("click", () => {
-  addLog("Log", "Riwayat sesi disiapkan untuk export", "ok");
-});
+const exportLogButton = document.querySelector("[data-export-log]");
+if (exportLogButton) {
+  exportLogButton.addEventListener("click", () => {
+    addLog("Log", "Riwayat sesi disiapkan untuk export", "ok");
+  });
+}
 
 document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
@@ -1191,5 +1840,7 @@ syncClock();
 drawIdleView();
 updateCalibrationBanner();
 updateDashboard(null, "-", "-", "WAJAH TIDAK TERBACA", 0);
+renderActivePatientProfile();
+searchPatients();
 
 setInterval(syncClock, 1000);

@@ -30,19 +30,29 @@
             <span class="nav-icon tracking-icon" aria-hidden="true"></span>
             Tracking
           </a>
+          <a href="#patient-search" data-patient-search-toggle>
+            <span class="nav-icon patient-icon" aria-hidden="true"></span>
+            Cari Pasien
+          </a>
           <a href="#pesan">
             <span class="nav-icon message-icon" aria-hidden="true"></span>
             Pesan
           </a>
-          <a href="#perangkat">
-            <span class="nav-icon device-icon" aria-hidden="true"></span>
-            Perangkat
-          </a>
-          <a href="#log">
-            <span class="nav-icon log-icon" aria-hidden="true"></span>
-            Log
-          </a>
         </nav>
+
+        <section class="patient-search-panel" id="patient-search" aria-label="Cari pasien tersimpan">
+          <label for="patientSearchInput">Cari Pasien</label>
+          <input
+            id="patientSearchInput"
+            type="search"
+            placeholder="Nama atau NIK"
+            autocomplete="off"
+            data-patient-search-input
+          >
+          <div class="patient-search-results" data-patient-search-results>
+            <p>Masukkan nama atau NIK.</p>
+          </div>
+        </section>
 
         <div class="sidebar-status">
           <span class="status-dot online"></span>
@@ -59,7 +69,7 @@
             <span></span>
           </button>
           <div class="page-title">
-            <p>Ruang ICU - Bed A12</p>
+            <p>Profil pasien & kalibrasi</p>
             <h1>Monitoring Pasien Non-Verbal</h1>
           </div>
           <div class="topbar-actions">
@@ -75,43 +85,6 @@
         </header>
 
         <main class="content" id="dashboard">
-          <section class="status-grid" aria-label="Status utama">
-            <article class="status-card critical-card">
-              <span class="card-label">Status Pasien</span>
-              <div class="status-card-main">
-                <strong data-patient-state>Responsif</strong>
-                <span class="status-badge safe">Stabil</span>
-              </div>
-              <p>Sinyal mata terbaca dari kamera asli dan sesi komunikasi aktif.</p>
-            </article>
-
-            <article class="status-card">
-              <span class="card-label">Arah Pandangan</span>
-              <div class="status-card-main">
-                <strong data-gaze-direction>Tengah</strong>
-                <span class="status-badge info" data-confidence>94%</span>
-              </div>
-              <div class="meter">
-                <span data-confidence-bar></span>
-              </div>
-            </article>
-
-            <article class="status-card">
-              <span class="card-label">Pesan Terakhir</span>
-              <div class="message-preview" data-current-message>Menunggu input pasien</div>
-              <p data-message-time>Belum ada pesan baru</p>
-            </article>
-
-            <article class="status-card">
-              <span class="card-label">Kondisi Perangkat</span>
-              <div class="device-health">
-                <span data-device-score>98</span>
-                <small>/100</small>
-              </div>
-              <p>Kamera, layar, speaker, dan unit proses normal.</p>
-            </article>
-          </section>
-
           <section class="monitor-grid" id="tracking">
             <article class="panel live-panel">
               <div class="panel-header">
@@ -140,7 +113,7 @@
                 </div>
                 <div class="calibration-banner" data-calibration-banner>
                   <strong data-calibration-title>Kalibrasi belum lengkap</strong>
-                  <span data-calibration-detail>Tekan B, C, dan T sesuai arah pandangan. Tekan S untuk mulai Program E.</span>
+                  <span data-calibration-detail>Ambil Bawah, Tengah, Atas, lalu simpan kalibrasi di panel kanan.</span>
                 </div>
                 <div class="camera-hud">
                   <span>FPS <strong data-fps>30</strong></span>
@@ -187,18 +160,101 @@
               </div>
             </article>
 
-            <article class="panel command-panel" id="pesan">
+            <article class="panel command-panel patient-workflow-panel" id="profile" data-profile-section>
               <div class="panel-header">
                 <div>
-                  <span class="card-label">Communication Output</span>
-                  <h2>Pesan Pasien</h2>
+                  <span class="card-label">Profil & Kalibrasi</span>
+                  <h2>Data Pasien</h2>
                 </div>
-                <button class="ghost-button" type="button" data-clear-message>Bersihkan</button>
+                <span class="status-badge warning" data-profile-save-status>Belum dipilih</span>
               </div>
+
+              <form class="inline-profile-form" data-patient-profile-form>
+                <div class="profile-form-grid">
+                  <label>
+                    <span>Nama</span>
+                    <input type="text" name="name" autocomplete="name" required data-profile-name>
+                  </label>
+                  <label>
+                    <span>Jenis Kelamin</span>
+                    <select name="gender" required data-profile-gender>
+                      <option value="">Pilih</option>
+                      <option value="Laki-laki">Laki-laki</option>
+                      <option value="Perempuan">Perempuan</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>NIK</span>
+                    <input type="text" name="nik" inputmode="numeric" autocomplete="off" required data-profile-nik>
+                  </label>
+                </div>
+                <p class="profile-save-note" data-profile-save-note>
+                  Data kalibrasi disimpan manual setelah profil diisi.
+                </p>
+                <button class="primary-button save-calibration-button" type="submit" data-save-calibration>
+                  Simpan Kalibrasi
+                </button>
+              </form>
+
+              <div class="profile-overview">
+                <div class="profile-identity">
+                  <span class="profile-avatar" data-profile-initials>--</span>
+                  <div>
+                    <strong data-profile-display-name>Belum ada pasien aktif</strong>
+                    <span data-profile-display-meta>Pilih pasien dari sidebar atau simpan kalibrasi baru.</span>
+                  </div>
+                </div>
+
+                <div class="profile-facts" aria-label="Detail profil pasien aktif">
+                  <div>
+                    <span>Nama</span>
+                    <strong data-profile-detail-name>-</strong>
+                  </div>
+                  <div>
+                    <span>Jenis Kelamin</span>
+                    <strong data-profile-detail-gender>-</strong>
+                  </div>
+                  <div>
+                    <span>NIK</span>
+                    <strong data-profile-detail-nik>-</strong>
+                  </div>
+                  <div>
+                    <span>Status Backend</span>
+                    <strong data-profile-backend-status>Belum tersimpan</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="calibration-profile-grid" aria-label="Data kalibrasi tersimpan">
+                <div>
+                  <span>Koordinat Atas</span>
+                  <strong data-saved-calibration-top>-</strong>
+                </div>
+                <div>
+                  <span>Koordinat Tengah</span>
+                  <strong data-saved-calibration-center>-</strong>
+                </div>
+                <div>
+                  <span>Koordinat Bawah</span>
+                  <strong data-saved-calibration-bottom>-</strong>
+                </div>
+                <div>
+                  <span>Threshold</span>
+                  <strong data-saved-calibration-threshold>-</strong>
+                </div>
+              </div>
+
+              <div class="panel-divider"></div>
 
               <div class="message-output">
                 <span>Output Aktif</span>
                 <strong data-output-text>Menunggu input pasien</strong>
+                <small data-message-time>Belum ada pesan baru</small>
+              </div>
+
+              <div class="message-toolbar" id="pesan">
+                <strong data-current-message>Menunggu input pasien</strong>
+                <button class="ghost-button" type="button" data-clear-message>Bersihkan</button>
               </div>
 
               <div class="gaze-map" aria-label="Pemetaan pesan arah pandangan">
@@ -237,117 +293,6 @@
             </article>
           </section>
 
-          <section class="metrics-grid" aria-label="Metrik sesi">
-            <article class="metric-card">
-              <span>Signal Strength</span>
-              <strong data-signal>91%</strong>
-              <div class="mini-meter"><span class="signal-meter-fill" data-signal-bar></span></div>
-            </article>
-            <article class="metric-card">
-              <span>Blink Rate</span>
-              <strong data-blink-rate>0 sesi</strong>
-              <div class="metric-trend up">Normal</div>
-            </article>
-            <article class="metric-card">
-              <span>Focus Stability</span>
-              <strong data-focus>88%</strong>
-              <div class="metric-trend up">Baik</div>
-            </article>
-            <article class="metric-card">
-              <span>Response Time</span>
-              <strong data-response>0.8 s</strong>
-              <div class="metric-trend flat">Stabil</div>
-            </article>
-          </section>
-
-          <section class="operations-grid">
-            <article class="panel" id="perangkat">
-              <div class="panel-header">
-                <div>
-                  <span class="card-label">Device Monitor</span>
-                  <h2>Status Perangkat</h2>
-                </div>
-                <button class="ghost-button" type="button" data-refresh-device>Refresh</button>
-              </div>
-              <div class="device-list">
-                <div class="device-row">
-                  <span class="device-dot online"></span>
-                  <div>
-                    <strong>Kamera HD</strong>
-                    <small>Aktif, frame stabil</small>
-                  </div>
-                  <span class="device-value" data-camera-status>30 FPS</span>
-                </div>
-                <div class="device-row">
-                  <span class="device-dot online"></span>
-                  <div>
-                    <strong>Unit Proses</strong>
-                    <small>CPU normal, suhu aman</small>
-                  </div>
-                  <span class="device-value" data-cpu-temp>48 C</span>
-                </div>
-                <div class="device-row">
-                  <span class="device-dot online"></span>
-                  <div>
-                    <strong>Layar Output</strong>
-                    <small>Mode komunikasi aktif</small>
-                  </div>
-                  <span class="device-value">Online</span>
-                </div>
-                <div class="device-row">
-                  <span class="device-dot warning"></span>
-                  <div>
-                    <strong>Speaker</strong>
-                    <small>Volume rendah</small>
-                  </div>
-                  <span class="device-value">42%</span>
-                </div>
-              </div>
-            </article>
-
-            <article class="panel alert-panel">
-              <div class="panel-header">
-                <div>
-                  <span class="card-label">Alert</span>
-                  <h2>Prioritas</h2>
-                </div>
-                <span class="status-badge warning" data-alert-count>2 aktif</span>
-              </div>
-              <div class="alert-list">
-                <div class="alert-row high">
-                  <strong>Pasien meminta bantuan</strong>
-                  <span data-alert-time>Baru saja</span>
-                </div>
-                <div class="alert-row medium">
-                  <strong>Volume speaker rendah</strong>
-                  <span>Perlu pengecekan</span>
-                </div>
-                <div class="alert-row low">
-                  <strong>Kalibrasi terakhir</strong>
-                  <span data-calibration-time>12 menit lalu</span>
-                </div>
-              </div>
-            </article>
-          </section>
-
-          <section class="panel log-panel" id="log">
-            <div class="panel-header">
-              <div>
-                <span class="card-label">Activity Log</span>
-                <h2>Riwayat Sesi</h2>
-              </div>
-              <button class="ghost-button" type="button" data-export-log>Export</button>
-            </div>
-            <div class="log-table" role="table" aria-label="Riwayat sesi monitoring">
-              <div class="log-row log-head" role="row">
-                <span role="columnheader">Waktu</span>
-                <span role="columnheader">Event</span>
-                <span role="columnheader">Detail</span>
-                <span role="columnheader">Status</span>
-              </div>
-              <div data-log-list></div>
-            </div>
-          </section>
         </main>
       </div>
     </div>
