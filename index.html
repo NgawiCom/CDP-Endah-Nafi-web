@@ -82,7 +82,7 @@
                 <strong data-patient-state>Responsif</strong>
                 <span class="status-badge safe">Stabil</span>
               </div>
-              <p>Sinyal mata terbaca dan sesi komunikasi aktif.</p>
+              <p>Sinyal mata terbaca dari kamera asli dan sesi komunikasi aktif.</p>
             </article>
 
             <article class="status-card">
@@ -98,8 +98,8 @@
 
             <article class="status-card">
               <span class="card-label">Pesan Terakhir</span>
-              <div class="message-preview" data-current-message>Saya haus</div>
-              <p data-message-time>Diterima 8 detik lalu</p>
+              <div class="message-preview" data-current-message>Menunggu input pasien</div>
+              <p data-message-time>Belum ada pesan baru</p>
             </article>
 
             <article class="status-card">
@@ -121,12 +121,32 @@
                 </div>
                 <span class="status-badge live">Live</span>
               </div>
-              <div class="camera-frame">
-                <canvas id="eyeCanvas" width="920" height="520" aria-label="Visualisasi live tracking mata"></canvas>
+              <div class="camera-frame" data-camera-frame>
+                <video id="cameraVideo" autoplay muted playsinline aria-label="Feed kamera wajah pasien"></video>
+                <canvas id="eyeCanvas" width="920" height="520" aria-label="Overlay live tracking wajah"></canvas>
+                <button
+                  class="camera-fullscreen-button"
+                  type="button"
+                  aria-label="Fullscreen kamera"
+                  title="Fullscreen kamera"
+                  data-camera-fullscreen
+                >
+                  <span class="fullscreen-icon" aria-hidden="true"></span>
+                </button>
+                <div class="camera-status-overlay" data-camera-overlay>
+                  <strong>Kamera belum aktif</strong>
+                  <span>Tekan tombol mulai untuk membuka kamera dan menjalankan deteksi wajah asli.</span>
+                  <button class="camera-start-button" type="button" data-start-camera>Mulai Kamera</button>
+                </div>
+                <div class="calibration-banner" data-calibration-banner>
+                  <strong data-calibration-title>Kalibrasi belum lengkap</strong>
+                  <span data-calibration-detail>Tekan B, C, dan T sesuai arah pandangan. Tekan S untuk mulai Program E.</span>
+                </div>
                 <div class="camera-hud">
                   <span>FPS <strong data-fps>30</strong></span>
-                  <span>EAR <strong data-ear>0.31</strong></span>
-                  <span>Blink <strong data-blink-count>12</strong></span>
+                  <span>Gap <strong data-eye-distance>0.024</strong></span>
+                  <span>Kedip <strong data-blink-count>0</strong></span>
+                  <span>Mata <strong data-eye-state>Terbuka</strong></span>
                 </div>
               </div>
               <div class="tracking-summary">
@@ -143,6 +163,28 @@
                   <strong data-lighting>Normal</strong>
                 </div>
               </div>
+              <div class="feature-strip" aria-label="Fitur MediaPipe">
+                <div>
+                  <span>Rasio Vertikal</span>
+                  <strong data-iris-468>0.000, 0.000</strong>
+                </div>
+                <div>
+                  <span>Ambang Arah</span>
+                  <strong data-iris-473>0.000, 0.000</strong>
+                </div>
+                <div>
+                  <span>Jarak Kelopak</span>
+                  <strong data-eyelid-gap>0.024</strong>
+                </div>
+                <div>
+                  <span>Prediksi Stabil</span>
+                  <strong data-stable-prediction>TENGAH</strong>
+                </div>
+                <div>
+                  <span>Status Hybrid</span>
+                  <strong data-click-status>BELUM ADA KLIK</strong>
+                </div>
+              </div>
             </article>
 
             <article class="panel command-panel" id="pesan">
@@ -156,31 +198,41 @@
 
               <div class="message-output">
                 <span>Output Aktif</span>
-                <strong data-output-text>Saya haus</strong>
+                <strong data-output-text>Menunggu input pasien</strong>
               </div>
 
-              <div class="quick-command-grid" aria-label="Pesan cepat">
-                <button type="button" data-command="Saya haus">Saya haus</button>
-                <button type="button" data-command="Saya sakit">Saya sakit</button>
-                <button type="button" data-command="Tolong panggil perawat">Panggil perawat</button>
-                <button type="button" data-command="Ubah posisi tidur">Ubah posisi</button>
-                <button type="button" data-command="Saya ingin istirahat">Istirahat</button>
-                <button type="button" data-command="Lampu terlalu terang">Lampu terang</button>
+              <div class="gaze-map" aria-label="Pemetaan pesan arah pandangan">
+                <button type="button" data-gaze-option="ATAS" data-command="Arah atas terdeteksi">
+                  <span>Atas</span>
+                  <strong>Program E</strong>
+                </button>
+                <button type="button" data-gaze-option="BAWAH" data-command="Arah bawah terdeteksi">
+                  <span>Bawah</span>
+                  <strong>Program E</strong>
+                </button>
               </div>
 
               <div class="signal-list">
                 <div>
-                  <span class="signal-label">Kedip 1x</span>
-                  <strong>Konfirmasi</strong>
+                  <span class="signal-label">Merem 5 detik</span>
+                  <strong>YES</strong>
                 </div>
                 <div>
-                  <span class="signal-label">Kedip 2x</span>
-                  <strong>Batalkan</strong>
+                  <span class="signal-label">Kedip 2x cepat</span>
+                  <strong>NO</strong>
                 </div>
                 <div>
-                  <span class="signal-label">Lirik kiri/kanan</span>
-                  <strong>Pilih opsi</strong>
+                  <span class="signal-label">Kalibrasi</span>
+                  <strong>B / C / T</strong>
                 </div>
+              </div>
+
+              <div class="calibration-controls" aria-label="Kontrol kalibrasi mata">
+                <button type="button" data-calibration-target="bottom">Bawah</button>
+                <button type="button" data-calibration-target="center">Tengah</button>
+                <button type="button" data-calibration-target="top">Atas</button>
+                <button type="button" data-start-program>Mulai</button>
+                <button type="button" data-reset-calibration>Ulang</button>
               </div>
             </article>
           </section>
@@ -189,11 +241,11 @@
             <article class="metric-card">
               <span>Signal Strength</span>
               <strong data-signal>91%</strong>
-              <div class="mini-meter"><span style="width: 91%"></span></div>
+              <div class="mini-meter"><span class="signal-meter-fill" data-signal-bar></span></div>
             </article>
             <article class="metric-card">
               <span>Blink Rate</span>
-              <strong data-blink-rate>14 /min</strong>
+              <strong data-blink-rate>0 sesi</strong>
               <div class="metric-trend up">Normal</div>
             </article>
             <article class="metric-card">
@@ -300,6 +352,8 @@
       </div>
     </div>
 
-    <script src="script.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+    <script defer src="script.js"></script>
   </body>
 </html>
