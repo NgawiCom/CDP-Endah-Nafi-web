@@ -38,6 +38,12 @@ http://localhost:8000
 
 Server backend juga melayani file frontend, jadi cukup satu proses. Izinkan akses kamera saat browser meminta izin. Library MediaPipe dimuat dari CDN, jadi perangkat perlu koneksi internet saat pertama kali membuka dashboard.
 
+Halaman akses:
+
+- Login: `http://localhost:8000/login.html`
+- Register: `http://localhost:8000/register.html`
+- Dashboard: `http://localhost:8000/index.html`
+
 Kontrol web sama seperti program Python:
 
 - Tekan `b` sambil melihat bawah.

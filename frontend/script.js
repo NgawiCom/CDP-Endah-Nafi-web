@@ -1189,7 +1189,6 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
   const hasFace = Boolean(features);
   const signal = hasFace ? clamp(confidence + 2, 36, 99) : 0;
   const focus = hasFace ? clamp(confidence - (displayDirection === "TENGAH" ? 0 : 5), 20, 98) : 0;
-  const temp = 45 + Math.round(Math.abs(Math.sin(Date.now() / 1800)) * 4);
   const profile = state.profile;
   const thresholdText = profile
     ? `${profile.upperThreshold.toFixed(3)} / ${profile.lowerThreshold.toFixed(3)}`
@@ -1210,12 +1209,12 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
   setText(elements.response, state.latency ? `${(state.latency / 1000).toFixed(2)} s` : "-");
   setText(elements.blinkRate, `${Math.max(0, state.blinkCount)} sesi`);
   setText(elements.cameraStatus, state.cameraActive ? `${Math.round(state.fps || 0)} FPS` : "Offline");
-  setText(elements.cpuTemp, `${temp} C`);
-  setText(elements.deviceScore, hasFace ? (signal > 88 ? "98" : "92") : "70");
-  setText(elements.trackingQuality, hasFace ? (confidence > 86 ? "Excellent" : confidence > 65 ? "Good" : "Cukup") : "Cari wajah");
-  setText(elements.lighting, hasFace ? "Normal" : "Cek cahaya");
-  setText(elements.alertTime, state.muted ? "Alert disenyapkan" : "Baru saja");
-  setText(elements.alertCount, state.muted ? "Senyap" : "2 aktif");
+  setText(elements.cpuTemp, "-");
+  setText(elements.deviceScore, hasFace ? `${signal}` : "-");
+  setText(elements.trackingQuality, hasFace ? (confidence > 86 ? "Sangat baik" : confidence > 65 ? "Baik" : "Cukup") : "Menunggu");
+  setText(elements.lighting, hasFace ? "Normal" : "Menunggu");
+  setText(elements.alertTime, state.muted ? "Alert disenyapkan" : "-");
+  setText(elements.alertCount, state.muted ? "Senyap" : "Tidak ada");
   setText(elements.iris468, features ? features.gazeRatio.toFixed(3) : "-");
   setText(elements.iris473, thresholdText);
   setText(elements.eyelidGap, features ? features.eyeGap.toFixed(3) : "-");
