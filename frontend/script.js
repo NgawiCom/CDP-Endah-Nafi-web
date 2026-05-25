@@ -300,15 +300,23 @@ function apiUrl(path) {
 }
 
 async function apiRequest(path, options = {}) {
+  const token = localStorage.getItem("echo_token");
   const response = await fetch(apiUrl(path), {
     method: options.method || "GET",
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
     keepalive: Boolean(options.keepalive),
   });
+
+  if (response.status === 401) {
+    localStorage.removeItem("echo_token");
+    window.location.replace("login.html");
+    return;
+  }
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -597,10 +605,12 @@ function closeBackendSession() {
     return;
   }
 
+  const token = localStorage.getItem("echo_token");
   fetch(apiUrl(`/sessions/${state.backend.sessionId}`), {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({
       status: "closed",
@@ -1208,7 +1218,12 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
   setText(elements.focus, `${focus}%`);
   setText(elements.response, state.latency ? `${(state.latency / 1000).toFixed(2)} s` : "-");
   setText(elements.blinkRate, `${Math.max(0, state.blinkCount)} sesi`);
-  setText(elements.cameraStatus, state.cameraActive ? `${Math.round(state.fps || 0)} FPS` : "Offline");
+  const cameraStatusText = state.cameraActive ? `${Math.round(state.fps || 0)} FPS` : "Offline";
+  setText(elements.cameraStatus, cameraStatusText);
+  const cameraStatusOps = document.querySelector("[data-camera-status-ops]");
+  if (cameraStatusOps && cameraStatusOps.textContent !== cameraStatusText) {
+    cameraStatusOps.textContent = cameraStatusText;
+  }
   setText(elements.cpuTemp, "-");
   setText(elements.deviceScore, hasFace ? `${signal}` : "-");
   setText(elements.trackingQuality, hasFace ? (confidence > 86 ? "Sangat baik" : confidence > 65 ? "Baik" : "Cukup") : "Menunggu");
@@ -1644,6 +1659,30 @@ function drawIdleView() {
   ctx.fillText("Deteksi akan memakai FaceMesh seperti logika program Python.", 42, 108);
 }
 
+async function logout() {
+  closeBackendSession();
+  const token = localStorage.getItem("echo_token");
+  if (token) {
+    try {
+      await fetch(apiUrl("/auth/logout"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        keepalive: true,
+      });
+    } catch {}
+  }
+  localStorage.removeItem("echo_token");
+  window.location.replace("login.html");
+}
+
+const logoutButton = document.querySelector("[data-logout]");
+if (logoutButton) {
+  logoutButton.addEventListener("click", logout);
+}
+
 menuButton.addEventListener("click", () => {
   const isOpen = sidebar.classList.toggle("is-open");
   document.body.classList.toggle("menu-open", isOpen);
@@ -1811,6 +1850,11 @@ if (exportLogButton) {
 }
 
 document.addEventListener("keydown", (event) => {
+  const tag = document.activeElement ? document.activeElement.tagName : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+    return;
+  }
+
   const key = event.key.toLowerCase();
 
   if (key === "escape" && state.fallbackFullscreen) {

@@ -9,6 +9,7 @@
       content="Dashboard monitoring E.C.H.O untuk pemantauan deteksi mata, status perangkat, dan pesan pasien non-verbal."
     >
     <link rel="stylesheet" href="styles.css">
+    <script>if(!localStorage.getItem("echo_token"))window.location.replace("login.html");</script>
   </head>
   <body>
     <div class="app-shell">
@@ -81,10 +82,43 @@
               <span class="target-icon" aria-hidden="true"></span>
               <span class="button-text">Kalibrasi</span>
             </button>
+            <button class="ghost-button" type="button" data-logout aria-label="Keluar">Keluar</button>
           </div>
         </header>
 
         <main class="content" id="dashboard">
+          <section class="status-grid">
+            <article class="status-card critical-card">
+              <span class="card-label">Status Pasien</span>
+              <div class="status-card-main">
+                <strong data-patient-state>Tidak terbaca</strong>
+                <span class="status-dot idle"></span>
+              </div>
+              <p data-gaze-direction>Menunggu</p>
+            </article>
+            <article class="status-card">
+              <span class="card-label">Kepercayaan Deteksi</span>
+              <div class="status-card-main">
+                <strong data-confidence>0%</strong>
+              </div>
+              <div class="meter"><span data-confidence-bar style="width:0%"></span></div>
+            </article>
+            <article class="status-card">
+              <span class="card-label">Kekuatan Sinyal</span>
+              <div class="status-card-main">
+                <strong data-signal>0%</strong>
+              </div>
+              <div class="meter"><span data-signal-bar style="width:0%"></span></div>
+            </article>
+            <article class="status-card">
+              <span class="card-label">Skor Perangkat</span>
+              <div class="status-card-main">
+                <strong data-device-score>-</strong>
+              </div>
+              <p data-camera-status>Kamera offline</p>
+            </article>
+          </section>
+
           <section class="monitor-grid" id="tracking">
             <article class="panel live-panel">
               <div class="panel-header">
@@ -185,7 +219,7 @@
                   </label>
                   <label>
                     <span>NIK</span>
-                    <input type="text" name="nik" inputmode="numeric" autocomplete="off" required data-profile-nik>
+                    <input type="text" name="nik" inputmode="numeric" autocomplete="off" required pattern="[0-9]{16}" maxlength="16" title="NIK harus 16 digit angka" data-profile-nik>
                   </label>
                 </div>
                 <p class="profile-save-note" data-profile-save-note>
@@ -292,6 +326,99 @@
               </div>
             </article>
           </section>
+
+          <section class="metrics-grid">
+            <article class="metric-card">
+              <span class="card-label">Fokus</span>
+              <strong data-focus>0%</strong>
+              <span class="metric-trend flat">Menunggu</span>
+            </article>
+            <article class="metric-card">
+              <span class="card-label">Respons</span>
+              <strong data-response>-</strong>
+              <span class="metric-trend flat">Latensi sistem</span>
+            </article>
+            <article class="metric-card">
+              <span class="card-label">Kedip Sesi</span>
+              <strong data-blink-rate>0 sesi</strong>
+              <span class="metric-trend flat">Total sesi ini</span>
+            </article>
+            <article class="metric-card">
+              <span class="card-label">CPU / Suhu</span>
+              <strong data-cpu-temp>-</strong>
+              <span class="metric-trend flat">Status perangkat</span>
+            </article>
+          </section>
+
+          <section class="operations-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <span class="card-label">Perangkat</span>
+                  <h2>Status Sistem</h2>
+                </div>
+              </div>
+              <div class="device-list">
+                <div class="device-row">
+                  <span class="device-dot idle"></span>
+                  <div>
+                    <strong>Kamera</strong>
+                    <small>Feed kamera eye-tracking</small>
+                  </div>
+                  <span class="device-value" data-camera-status-ops>Offline</span>
+                </div>
+                <div class="device-row">
+                  <span class="device-dot idle"></span>
+                  <div>
+                    <strong>Waktu Alert Terakhir</strong>
+                    <small>Alert sistem monitoring</small>
+                  </div>
+                  <span class="device-value" data-alert-time>-</span>
+                </div>
+                <div class="device-row">
+                  <span class="device-dot idle"></span>
+                  <div>
+                    <strong>Kalibrasi Terakhir</strong>
+                    <small>Sesi kalibrasi mata</small>
+                  </div>
+                  <span class="device-value" data-calibration-time>-</span>
+                </div>
+              </div>
+            </article>
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <span class="card-label">Notifikasi</span>
+                  <h2>Alert Aktif</h2>
+                </div>
+                <span class="status-badge info" data-alert-count>0</span>
+              </div>
+              <div class="alert-list">
+                <div class="alert-row low">
+                  <strong>Sistem berjalan normal</strong>
+                  <span>Tidak ada alert yang memerlukan perhatian.</span>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <article class="panel log-panel">
+            <div class="panel-header">
+              <div>
+                <span class="card-label">Riwayat</span>
+                <h2>Log Aktivitas</h2>
+              </div>
+            </div>
+            <div class="log-table" role="table" aria-label="Log aktivitas sesi">
+              <div class="log-row log-head" role="row">
+                <span role="columnheader">Waktu</span>
+                <span role="columnheader">Event</span>
+                <span role="columnheader">Detail</span>
+                <span role="columnheader">Status</span>
+              </div>
+              <div data-log-list></div>
+            </div>
+          </article>
 
         </main>
       </div>
