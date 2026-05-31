@@ -72,17 +72,6 @@
     </main>
 
     <script>
-<<<<<<< HEAD
-      'use strict';
-      try {
-        document.querySelector("[data-auth-redirect]").addEventListener("submit", (event) => {
-          event.preventDefault();
-          window.location.href = event.currentTarget.dataset.authRedirect;
-        });
-      } catch (error) {
-        console.error('Error setting up login form:', error);
-      }
-=======
       const form = document.getElementById("loginForm");
       const errorEl = document.getElementById("loginError");
 
@@ -114,7 +103,6 @@
           btn.disabled = false;
         }
       });
->>>>>>> 321763ebf3d9b1a3ebc9a779a7fd44a71097fed4
     </script>
   </body>
 </html>

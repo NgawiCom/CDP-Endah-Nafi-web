@@ -237,7 +237,6 @@ function escapeHtml(value) {
     value = String(value || '');
   }
   
-  // Menggunakan metode yang kompatibel dengan browser lama
   return value
     .split('&').join('&amp;')
     .split('<').join('&lt;')
@@ -325,17 +324,24 @@ function apiUrl(path) {
 }
 
 async function apiRequest(path, options = {}) {
-<<<<<<< HEAD
   try {
+    const token = localStorage.getItem("echo_token");
     const response = await fetch(apiUrl(path), {
       method: options.method || "GET",
       headers: {
         "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options.headers || {}),
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
       keepalive: Boolean(options.keepalive),
     });
+
+    if (response.status === 401) {
+      localStorage.removeItem("echo_token");
+      window.location.replace("login.html");
+      return;
+    }
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -346,29 +352,6 @@ async function apiRequest(path, options = {}) {
   } catch (error) {
     console.error('API request error:', path, error);
     throw error;
-=======
-  const token = localStorage.getItem("echo_token");
-  const response = await fetch(apiUrl(path), {
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    keepalive: Boolean(options.keepalive),
-  });
-
-  if (response.status === 401) {
-    localStorage.removeItem("echo_token");
-    window.location.replace("login.html");
-    return;
-  }
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || `Request backend gagal (${response.status})`);
->>>>>>> 321763ebf3d9b1a3ebc9a779a7fd44a71097fed4
   }
 }
 
@@ -401,6 +384,7 @@ function setActivePatient(patient, calibrationSaved = Boolean(patient && patient
   }
 }
 
+// Teruskan sisa fungsi pembantu...
 function renderActivePatientProfile() {
   const patient = state.backend.activePatient;
   const calibrationData = patient && patient.calibration_data;
@@ -1286,7 +1270,6 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
 }
 
 function updateCalibrationControls() {
-  // Disable calibration buttons when patient with saved calibration is loaded and running
   const isPatientActive = Boolean(state.backend.activePatient && state.backend.calibrationSaved);
   const shouldDisable = state.mode === "running" && isPatientActive;
 
@@ -1641,8 +1624,8 @@ function drawCameraOverlays(features, map, displayDirection, programDirection, e
     drawTextBlock(
       [
         "PROGRAM E AKTIF - dua arah: ATAS / BAWAH",
-        `ARAH PROGRAM: ${programDirection || "-"}     DETEKSI: ${displayDirection}`,
-        `MATA: ${eyeState}     OUTPUT: ${state.output}`,
+        `ARAH PROGRAM: ${programDirection || "-"}      DETEKSI: ${displayDirection}`,
+        `MATA: ${eyeState}      OUTPUT: ${state.output}`,
         `ratio=${ratioText}  gap=${gapText}  conf=${confidence}%  threshold=${thresholdText}`,
       ],
       18,
@@ -1755,7 +1738,6 @@ navLinks.forEach((link) => {
   });
 });
 
-// Safely add event listeners with null checks
 try {
   document.querySelectorAll("[data-command]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1773,7 +1755,6 @@ try {
   const calibrateButton = document.querySelector("[data-calibrate]");
   if (calibrateButton) {
     calibrateButton.addEventListener("click", () => {
-      // Protect against accidental reset when patient profile is active
       if (state.backend.activePatient && state.backend.calibrationSaved) {
         const confirmed = confirm(
           `Anda yakin ingin mulai kalibrasi baru untuk ${state.backend.activePatient.name}?\n\n` +
@@ -1782,7 +1763,6 @@ try {
         if (!confirmed) {
           return;
         }
-        // Clear active patient when resetting calibration
         setActivePatient(null, false);
       }
       
@@ -1795,11 +1775,9 @@ try {
   console.error('Error setting up event listeners:', error);
 }
 
-// Safely add calibration and program listeners
 try {
   document.querySelectorAll("[data-calibration-target]").forEach((button) => {
     button.addEventListener("click", () => {
-      // Protect against accidental calibration when patient profile is active
       if (state.backend.activePatient && state.backend.calibrationSaved && state.mode === "running") {
         const confirmed = confirm(
           `Profil ${state.backend.activePatient.name} sedang aktif.\n\n` +
@@ -1808,7 +1786,6 @@ try {
         if (!confirmed) {
           return;
         }
-        // Clear active patient when starting new calibration
         setActivePatient(null, false);
       }
       
@@ -1826,7 +1803,6 @@ try {
   const resetCalibrationButton = document.querySelector("[data-reset-calibration]");
   if (resetCalibrationButton) {
     resetCalibrationButton.addEventListener("click", () => {
-      // Protect against accidental reset when patient profile is active
       if (state.backend.activePatient && state.backend.calibrationSaved) {
         const confirmed = confirm(
           `Anda yakin ingin ulang kalibrasi untuk ${state.backend.activePatient.name}?\n\n` +
@@ -1835,7 +1811,6 @@ try {
         if (!confirmed) {
           return;
         }
-        // Clear active patient when resetting calibration
         setActivePatient(null, false);
       }
       
@@ -1862,7 +1837,6 @@ try {
 
 document.addEventListener("fullscreenchange", handleCameraFullscreenChange);
 
-// Safely add patient search listeners
 try {
   if (elements.patientSearchInput) {
     elements.patientSearchInput.addEventListener("focus", () => {
@@ -1908,7 +1882,6 @@ window.addEventListener("resize", () => {
 
 window.addEventListener("beforeunload", closeBackendSession);
 
-// Safely add remaining event listeners
 try {
   const toggleAlertButton = document.querySelector("[data-toggle-alert]");
   if (toggleAlertButton) {
@@ -1940,6 +1913,12 @@ try {
   }
 
   document.addEventListener("keydown", (event) => {
+    // Abaikan pintasan jika user sedang mengetik di input form
+    const tag = document.activeElement ? document.activeElement.tagName : "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+      return;
+    }
+
     const key = event.key.toLowerCase();
 
     if (key === "escape" && state.fallbackFullscreen) {
@@ -1966,7 +1945,7 @@ try {
   console.error('Error setting up remaining event listeners:', error);
 }
 
-// Initialize aplikasi dengan error handling
+// Inisialisasi Aplikasi Utama
 try {
   renderLogs();
   syncClock();
@@ -1981,45 +1960,3 @@ try {
   console.error('Error initializing application:', error);
   addLog('System', 'Error initializing app: ' + error.message, 'warn');
 }
-<<<<<<< HEAD
-=======
-
-document.addEventListener("keydown", (event) => {
-  const tag = document.activeElement ? document.activeElement.tagName : "";
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
-    return;
-  }
-
-  const key = event.key.toLowerCase();
-
-  if (key === "escape" && state.fallbackFullscreen) {
-    exitCameraFullscreen();
-    return;
-  }
-
-  if (TARGET_BY_KEY[key]) {
-    startCalibrationTarget(TARGET_BY_KEY[key]);
-    return;
-  }
-
-  if (key === "s") {
-    startProgram();
-    return;
-  }
-
-  if (key === "r") {
-    resetCalibration();
-    addLog("Kalibrasi", "Kalibrasi diulang", "ok");
-  }
-});
-
-renderLogs();
-syncClock();
-drawIdleView();
-updateCalibrationBanner();
-updateDashboard(null, "-", "-", "WAJAH TIDAK TERBACA", 0);
-renderActivePatientProfile();
-searchPatients();
-
-setInterval(syncClock, 1000);
->>>>>>> 321763ebf3d9b1a3ebc9a779a7fd44a71097fed4
