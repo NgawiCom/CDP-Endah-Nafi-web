@@ -6,6 +6,11 @@
     <title>Login E.C.H.O Monitoring</title>
     <meta name="description" content="Halaman login E.C.H.O Monitoring.">
     <link rel="stylesheet" href="styles.css">
+    <script>
+      if (localStorage.getItem("echo_token")) {
+        window.location.replace("index.html");
+      }
+    </script>
   </head>
   <body class="auth-page">
     <main class="auth-shell">
@@ -29,7 +34,7 @@
           <h2 id="loginTitle">Masuk Akun</h2>
         </div>
 
-        <form class="auth-form" data-auth-redirect="index.html">
+        <form class="auth-form" id="loginForm" novalidate>
           <label>
             <span>Email</span>
             <input type="email" name="email" autocomplete="email" required>
@@ -47,6 +52,13 @@
             <a href="register.html">Daftar akun</a>
           </div>
 
+          <p
+            id="loginError"
+            role="alert"
+            aria-live="polite"
+            style="display:none;margin:0;color:#d64545;font-size:0.9rem;font-weight:700;"
+          ></p>
+
           <button class="primary-button auth-submit" type="submit">Masuk</button>
           
           <div style="text-align: center; margin-top: 16px;">
@@ -58,7 +70,9 @@
         </form>
       </section>
     </main>
+
     <script>
+<<<<<<< HEAD
       'use strict';
       try {
         document.querySelector("[data-auth-redirect]").addEventListener("submit", (event) => {
@@ -68,6 +82,39 @@
       } catch (error) {
         console.error('Error setting up login form:', error);
       }
+=======
+      const form = document.getElementById("loginForm");
+      const errorEl = document.getElementById("loginError");
+
+      function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.style.display = "block";
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const data = Object.fromEntries(new FormData(form));
+        const btn = form.querySelector("button[type=submit]");
+
+        btn.disabled = true;
+        errorEl.style.display = "none";
+
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: data.email, password: data.password }),
+          });
+          const payload = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(payload.error || "Login gagal.");
+          localStorage.setItem("echo_token", payload.token);
+          window.location.replace("index.html");
+        } catch (err) {
+          showError(err.message || "Terjadi kesalahan jaringan.");
+          btn.disabled = false;
+        }
+      });
+>>>>>>> 321763ebf3d9b1a3ebc9a779a7fd44a71097fed4
     </script>
   </body>
 </html>

@@ -6,6 +6,11 @@
     <title>Register E.C.H.O Monitoring</title>
     <meta name="description" content="Halaman registrasi E.C.H.O Monitoring.">
     <link rel="stylesheet" href="styles.css">
+    <script>
+      if (localStorage.getItem("echo_token")) {
+        window.location.replace("index.html");
+      }
+    </script>
   </head>
   <body class="auth-page">
     <main class="auth-shell">
@@ -29,7 +34,7 @@
           <h2 id="registerTitle">Buat Akun</h2>
         </div>
 
-        <form class="auth-form" data-auth-redirect="login.html">
+        <form class="auth-form" id="registerForm" novalidate>
           <label>
             <span>Nama Lengkap</span>
             <input type="text" name="name" autocomplete="name" required>
@@ -49,7 +54,7 @@
           </label>
           <label>
             <span>Password</span>
-            <input type="password" name="password" autocomplete="new-password" required>
+            <input type="password" name="password" autocomplete="new-password" required minlength="6">
           </label>
           <label>
             <span>Konfirmasi Password</span>
@@ -60,6 +65,13 @@
             <span>Sudah punya akun?</span>
             <a href="login.html">Masuk</a>
           </div>
+
+          <p
+            id="registerError"
+            role="alert"
+            aria-live="polite"
+            style="display:none;margin:0;color:#d64545;font-size:0.9rem;font-weight:700;"
+          ></p>
 
           <button class="primary-button auth-submit" type="submit">Daftar</button>
           
@@ -72,7 +84,9 @@
         </form>
       </section>
     </main>
+
     <script>
+<<<<<<< HEAD
       'use strict';
       try {
         document.querySelector("[data-auth-redirect]").addEventListener("submit", (event) => {
@@ -82,6 +96,52 @@
       } catch (error) {
         console.error('Error setting up register form:', error);
       }
+=======
+      const form = document.getElementById("registerForm");
+      const errorEl = document.getElementById("registerError");
+
+      function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.style.display = "block";
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const data = Object.fromEntries(new FormData(form));
+        const btn = form.querySelector("button[type=submit]");
+
+        if (data.password !== data.password_confirmation) {
+          showError("Konfirmasi password tidak cocok.");
+          return;
+        }
+        if (data.password.length < 6) {
+          showError("Password minimal 6 karakter.");
+          return;
+        }
+
+        btn.disabled = true;
+        errorEl.style.display = "none";
+
+        try {
+          const res = await fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: data.name,
+              email: data.email,
+              role: data.role,
+              password: data.password,
+            }),
+          });
+          const payload = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(payload.error || "Registrasi gagal.");
+          window.location.replace("login.html");
+        } catch (err) {
+          showError(err.message || "Terjadi kesalahan jaringan.");
+          btn.disabled = false;
+        }
+      });
+>>>>>>> 321763ebf3d9b1a3ebc9a779a7fd44a71097fed4
     </script>
   </body>
 </html>

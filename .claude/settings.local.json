@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /d \"d:\\\\CDP-Endah-Nafi-web\")",
+      "Bash(python -c \"import socket; s=socket.socket\\(\\); result=s.connect_ex\\(\\('127.0.0.1', 8000\\)\\); s.close\\(\\); print\\('RUNNING' if result==0 else 'NOT RUNNING'\\)\")",
+      "PowerShell(& \"d:\\\\CDP-Endah-Nafi-web\\\\backend\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import sys; sys.path.insert\\(0,'d:/CDP-Endah-Nafi-web/backend'\\); from app.main import create_app; app = create_app\\(\\); print\\('App OK, routes:', len\\(app.routes\\)\\)\")",
+      "PowerShell(\"DUPLICATE EMAIL:\"; try { Invoke-RestMethod -Method POST -Uri \"http://127.0.0.1:8000/api/auth/register\" -ContentType \"application/json\" -Body '{\"name\":\"Coba Lagi\",\"email\":\"endah@echo.dev\",\"password\":\"rahasia123\"}' } catch { $_.ErrorDetails.Message })"
+    ]
+  }
+}
