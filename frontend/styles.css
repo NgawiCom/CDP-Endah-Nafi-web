@@ -1798,3 +1798,110 @@ h3 {
     padding: 20px;
   }
 }
+
+/* ── Patient list (sidebar) ──────────────────────────────────────────────── */
+
+.device-dot.active {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(22, 163, 106, 0.14);
+}
+
+.patient-list-panel {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.patient-list-header {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.patient-list-items {
+  display: grid;
+  gap: 5px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.patient-list-empty {
+  margin: 4px 0 0;
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 0.8rem;
+}
+
+.patient-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.patient-list-item:hover,
+.patient-list-item:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.patient-list-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--teal);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.patient-list-info {
+  display: grid;
+  min-width: 0;
+}
+
+.patient-list-info strong {
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patient-list-info small {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.72rem;
+}
+
+/* ── Save calibration form + active patient card ─────────────────────────── */
+
+.save-calibration-section {
+  display: grid;
+  gap: 14px;
+}
+
+[data-active-patient-section] .profile-overview {
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}

@@ -1,20 +1,15 @@
-// Polyfill untuk String.prototype.replaceAll untuk kompatibilitas Edge/Browser lama
 if (!String.prototype.replaceAll) {
   String.prototype.replaceAll = function(search, replace) {
     if (typeof search === 'string') {
       return this.split(search).join(replace);
     }
-    let target = this;
-    let regex;
     if (search instanceof RegExp) {
       if (!search.global) {
         throw new TypeError('replaceAll called with a non-global RegExp argument');
       }
-      regex = search;
-    } else {
-      regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+      return this.replace(search, replace);
     }
-    return target.replace(regex, replace);
+    return this.replace(new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), replace);
   };
 }
 
@@ -71,14 +66,9 @@ const directions = [
   { id: 1, label: "BAWAH", name: "Bawah", message: "Arah bawah terdeteksi" },
 ];
 
-const directionsByLabel = new Map(directions.map((direction) => [direction.label, direction]));
-const API_BASE_URL =
-  window.ECHO_API_BASE_URL ||
-  (window.location.hostname === "127.0.0.1" && window.location.port === "8000"
-    ? "/api"
-    : "http://127.0.0.1:8000/api");
-const TRACKING_SNAPSHOT_INTERVAL_MS = 2500;
-const PATIENT_SEARCH_DEBOUNCE_MS = 250;
+const directionsByLabel = new Map(directions.map((d) => [d.label, d]));
+
+const STORAGE_KEY = "echo_patients";
 
 const state = {
   startedAt: Date.now(),
@@ -112,20 +102,7 @@ const state = {
   lastFeatures: null,
   lastCanvasMap: null,
   output: "MENUNGGU",
-  backend: {
-    initializing: false,
-    initPromise: null,
-    online: false,
-    disabled: false,
-    errorLogged: false,
-    patientId: null,
-    sessionId: null,
-    lastSnapshotAt: 0,
-    activePatient: null,
-    calibrationSaved: false,
-    pendingStartProfile: null,
-    searchTimer: 0,
-  },
+  activePatient: null,
   logs: [],
 };
 
@@ -144,17 +121,19 @@ const elements = {
   blinkCount: document.querySelector("[data-blink-count]"),
   trackingQuality: document.querySelector("[data-tracking-quality]"),
   latency: document.querySelector("[data-latency]"),
-  lighting: document.querySelector("[data-lighting]"),
+
   signal: document.querySelector("[data-signal]"),
   signalBar: document.querySelector("[data-signal-bar]"),
   blinkRate: document.querySelector("[data-blink-rate]"),
   focus: document.querySelector("[data-focus]"),
   response: document.querySelector("[data-response]"),
   cameraStatus: document.querySelector("[data-camera-status]"),
-  cpuTemp: document.querySelector("[data-cpu-temp]"),
-  alertTime: document.querySelector("[data-alert-time]"),
+  sessionDuration: document.querySelector("[data-session-duration]"),
+  calibrationStatus: document.querySelector("[data-calibration-status]"),
   calibrationTime: document.querySelector("[data-calibration-time]"),
   alertCount: document.querySelector("[data-alert-count]"),
+  alertList: document.querySelector("[data-alert-list]"),
+  deviceDotCamera: document.querySelector("[data-device-dot-camera]"),
   logList: document.querySelector("[data-log-list]"),
   iris468: document.querySelector("[data-iris-468]"),
   iris473: document.querySelector("[data-iris-473]"),
@@ -163,30 +142,18 @@ const elements = {
   clickStatus: document.querySelector("[data-click-status]"),
   gazeButtons: Array.from(document.querySelectorAll("[data-gaze-option]")),
   cameraOverlay: document.querySelector("[data-camera-overlay]"),
+  patientList: document.querySelector("[data-patient-list]"),
+  saveSection: document.querySelector("[data-save-section]"),
+  saveForm: document.querySelector("[data-save-form]"),
+  saveError: document.querySelector("[data-save-error]"),
+  activePatientSection: document.querySelector("[data-active-patient-section]"),
+  activeInitials: document.querySelector("[data-active-initials]"),
+  activeName: document.querySelector("[data-active-name]"),
+  activeMeta: document.querySelector("[data-active-meta]"),
   startCamera: document.querySelector("[data-start-camera]"),
   calibrationBanner: document.querySelector("[data-calibration-banner]"),
   calibrationTitle: document.querySelector("[data-calibration-title]"),
   calibrationDetail: document.querySelector("[data-calibration-detail]"),
-  patientSearchInput: document.querySelector("[data-patient-search-input]"),
-  patientSearchResults: document.querySelector("[data-patient-search-results]"),
-  patientProfileForm: document.querySelector("[data-patient-profile-form]"),
-  profileName: document.querySelector("[data-profile-name]"),
-  profileGender: document.querySelector("[data-profile-gender]"),
-  profileNik: document.querySelector("[data-profile-nik]"),
-  profileSaveNote: document.querySelector("[data-profile-save-note]"),
-  profileSection: document.querySelector("[data-profile-section]"),
-  profileSaveStatus: document.querySelector("[data-profile-save-status]"),
-  profileInitials: document.querySelector("[data-profile-initials]"),
-  profileDisplayName: document.querySelector("[data-profile-display-name]"),
-  profileDisplayMeta: document.querySelector("[data-profile-display-meta]"),
-  profileDetailName: document.querySelector("[data-profile-detail-name]"),
-  profileDetailGender: document.querySelector("[data-profile-detail-gender]"),
-  profileDetailNik: document.querySelector("[data-profile-detail-nik]"),
-  profileBackendStatus: document.querySelector("[data-profile-backend-status]"),
-  savedCalibrationTop: document.querySelector("[data-saved-calibration-top]"),
-  savedCalibrationCenter: document.querySelector("[data-saved-calibration-center]"),
-  savedCalibrationBottom: document.querySelector("[data-saved-calibration-bottom]"),
-  savedCalibrationThreshold: document.querySelector("[data-saved-calibration-threshold]"),
 };
 
 let faceMesh = null;
@@ -195,11 +162,7 @@ let camera = null;
 function createCalibrationState(message) {
   return {
     seconds: DEFAULT_CALIBRATION_SECONDS,
-    samples: {
-      top: [],
-      center: [],
-      bottom: [],
-    },
+    samples: { top: [], center: [], bottom: [] },
     openEyeGaps: [],
     activeTarget: null,
     activeSamples: [],
@@ -218,25 +181,14 @@ function clamp(value, min, max) {
 }
 
 function safeMedian(values) {
-  if (!values.length) {
-    return 0;
-  }
-
+  if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-
-  if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
-  }
-
-  return sorted[middle];
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
 function escapeHtml(value) {
-  if (typeof value !== 'string') {
-    value = String(value || '');
-  }
-  
+  if (typeof value !== 'string') value = String(value || '');
   return value
     .split('&').join('&amp;')
     .split('<').join('&lt;')
@@ -250,600 +202,88 @@ function formatTime(date = new Date()) {
 }
 
 function formatDuration(milliseconds) {
-  const totalSeconds = Math.floor(milliseconds / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-}
-
-function formatNumber(value, digits = 3) {
-  if (!Number.isFinite(value)) {
-    return "-";
-  }
-
-  return value.toFixed(digits);
-}
-
-function formatPoint(point) {
-  if (!point) {
-    return "-";
-  }
-
-  return `${point.x.toFixed(3)}, ${point.y.toFixed(3)}`;
+  const total = Math.floor(milliseconds / 1000);
+  return `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
 }
 
 function setText(element, value) {
-  if (!element || typeof element.textContent === 'undefined') {
-    return;
-  }
-
-  const nextValue = String(value);
-  if (element.textContent !== nextValue) {
-    element.textContent = nextValue;
-  }
+  if (!element || typeof element.textContent === 'undefined') return;
+  const next = String(value);
+  if (element.textContent !== next) element.textContent = next;
 }
 
 function setWidth(element, value) {
-  if (!element) {
-    return;
-  }
-
-  if (element.style.width !== value) {
-    element.style.width = value;
-  }
-}
-
-function numberOrNull(value) {
-  return Number.isFinite(value) ? value : null;
-}
-
-function formatSavedNumber(value) {
-  return Number.isFinite(Number(value)) ? Number(value).toFixed(3) : "-";
+  if (!element) return;
+  if (element.style.width !== value) element.style.width = value;
 }
 
 function getInitials(name) {
-  const parts = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-
-  if (!parts.length) {
-    return "--";
-  }
-
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join("");
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "--";
+  return parts.slice(0, 2).map((p) => p[0].toUpperCase()).join("");
 }
 
-function apiUrl(path) {
-  return `${API_BASE_URL}${path}`;
+function loadStoredPatients() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+  catch { return []; }
 }
 
-async function apiRequest(path, options = {}) {
-  try {
-    const token = localStorage.getItem("echo_token");
-    const response = await fetch(apiUrl(path), {
-      method: options.method || "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options.headers || {}),
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      keepalive: Boolean(options.keepalive),
-    });
-
-    if (response.status === 401) {
-      localStorage.removeItem("echo_token");
-      window.location.replace("login.html");
-      return;
-    }
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || `Request backend gagal (${response.status})`);
-    }
-
-    return payload;
-  } catch (error) {
-    console.error('API request error:', path, error);
-    throw error;
-  }
+function persistPatient(patient) {
+  const list = loadStoredPatients();
+  const idx = list.findIndex((p) => p.nik === patient.nik);
+  if (idx >= 0) list[idx] = patient;
+  else list.unshift(patient);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
-function reportBackendError(error) {
-  if (state.backend.errorLogged) {
-    return;
-  }
-
-  state.backend.errorLogged = true;
-  addLog("Backend", `Penyimpanan data belum aktif: ${error.message}`, "warn");
-}
-
-function setActivePatient(patient, calibrationSaved = Boolean(patient && patient.has_calibration)) {
-  state.backend.activePatient = patient;
-  state.backend.patientId = patient ? patient.id : null;
-  state.backend.calibrationSaved = calibrationSaved;
-  renderActivePatientProfile();
-
-  if (patient) {
-    if (elements.profileName) {
-      elements.profileName.value = patient.name || "";
-    }
-    if (elements.profileGender) {
-      elements.profileGender.value = patient.gender || "";
-    }
-    if (elements.profileNik) {
-      elements.profileNik.value = patient.nik || "";
-    }
-    setText(elements.messageTime, `Profil aktif: ${patient.name} / ${patient.nik}`);
-  }
-}
-
-// Teruskan sisa fungsi pembantu...
-function renderActivePatientProfile() {
-  const patient = state.backend.activePatient;
-  const calibrationData = patient && patient.calibration_data;
-  const profile = state.profile || calibrationData?.profile || null;
-  const coordinates = calibrationData?.coordinates || profile || {};
-  const thresholds = calibrationData?.thresholds || {};
-  const hasCalibration = Boolean(state.backend.calibrationSaved || patient?.has_calibration || profile);
-  const sessionText = state.backend.sessionId ? `Tersimpan / sesi #${state.backend.sessionId}` : "Profil tersimpan";
-
-  if (!patient) {
-    elements.profileSaveStatus.className = "status-badge warning";
-    setText(elements.profileSaveStatus, "Belum dipilih");
-    setText(elements.profileInitials, "--");
-    setText(elements.profileDisplayName, "Belum ada pasien aktif");
-    setText(elements.profileDisplayMeta, "Pilih pasien dari sidebar atau simpan hasil kalibrasi baru.");
-    setText(elements.profileDetailName, "-");
-    setText(elements.profileDetailGender, "-");
-    setText(elements.profileDetailNik, "-");
-    setText(elements.profileBackendStatus, "Belum tersimpan");
-    setText(elements.savedCalibrationTop, "-");
-    setText(elements.savedCalibrationCenter, "-");
-    setText(elements.savedCalibrationBottom, "-");
-    setText(elements.savedCalibrationThreshold, "-");
-    return;
-  }
-
-  elements.profileSaveStatus.className = hasCalibration ? "status-badge safe" : "status-badge warning";
-  setText(elements.profileSaveStatus, hasCalibration ? "Kalibrasi tersimpan" : "Belum ada kalibrasi");
-  setText(elements.profileInitials, getInitials(patient.name));
-  setText(elements.profileDisplayName, patient.name || "-");
-  setText(
-    elements.profileDisplayMeta,
-    `${patient.gender || "-"} / NIK ${patient.nik || "-"}`
-  );
-  setText(elements.profileDetailName, patient.name || "-");
-  setText(elements.profileDetailGender, patient.gender || "-");
-  setText(elements.profileDetailNik, patient.nik || "-");
-  setText(elements.profileBackendStatus, sessionText);
-  setText(elements.savedCalibrationTop, formatSavedNumber(coordinates.top));
-  setText(elements.savedCalibrationCenter, formatSavedNumber(coordinates.center));
-  setText(elements.savedCalibrationBottom, formatSavedNumber(coordinates.bottom));
-  setText(
-    elements.savedCalibrationThreshold,
-    `${formatSavedNumber(thresholds.upper ?? profile?.upperThreshold)} / ${formatSavedNumber(
-      thresholds.lower ?? profile?.lowerThreshold
-    )} / ${formatSavedNumber(thresholds.closed ?? profile?.closedThreshold)}`
-  );
-}
-
-function showProfileSection() {
-  if (!elements.profileSection) {
-    return;
-  }
-
-  elements.profileSection.scrollIntoView({ behavior: "smooth", block: "start" });
-  history.replaceState(null, "", "#profile");
-}
-
-function serializeCalibrationData(profile = state.profile) {
-  return {
-    version: 1,
-    captured_at: new Date().toISOString(),
-    source: "browser-dashboard",
-    coordinates: {
-      top: profile ? profile.top : null,
-      center: profile ? profile.center : null,
-      bottom: profile ? profile.bottom : null,
-    },
-    thresholds: {
-      upper: profile ? profile.upperThreshold : null,
-      lower: profile ? profile.lowerThreshold : null,
-      closed: profile ? profile.closedThreshold : null,
-    },
-    profile,
-    samples: {
-      top: [...state.calibration.samples.top],
-      center: [...state.calibration.samples.center],
-      bottom: [...state.calibration.samples.bottom],
-    },
-    openEyeGaps: [...state.calibration.openEyeGaps],
-  };
-}
-
-function normalizeCalibrationProfile(profile) {
-  if (!profile) {
-    return null;
-  }
-
-  const normalized = {
-    top: Number(profile.top),
-    center: Number(profile.center),
-    bottom: Number(profile.bottom),
-    upperThreshold: Number(profile.upperThreshold ?? profile.upper_threshold ?? profile.thresholds?.upper),
-    lowerThreshold: Number(profile.lowerThreshold ?? profile.lower_threshold ?? profile.thresholds?.lower),
-    closedThreshold: Number(profile.closedThreshold ?? profile.closed_threshold ?? profile.thresholds?.closed),
-    orderedAutomatically: Boolean(profile.orderedAutomatically ?? profile.ordered_automatically),
-    range: Number(profile.range ?? Number(profile.bottom) - Number(profile.top)),
-  };
-
-  return Object.values(normalized).some((value) => typeof value === "number" && !Number.isFinite(value))
-    ? null
-    : normalized;
-}
-
-function applyPatientCalibration(patient) {
-  const calibrationData = patient.calibration_data;
-  if (!calibrationData) {
-    throw new Error("Profil pasien belum punya data kalibrasi.");
-  }
-
-  const samples = calibrationData.samples || {};
-  state.calibration = createCalibrationState(`Profil ${patient.name} dimuat. Kalibrasi tersimpan aktif.`);
-  state.calibration.samples = {
-    top: Array.isArray(samples.top) ? samples.top.map(Number).filter(Number.isFinite) : [],
-    center: Array.isArray(samples.center) ? samples.center.map(Number).filter(Number.isFinite) : [],
-    bottom: Array.isArray(samples.bottom) ? samples.bottom.map(Number).filter(Number.isFinite) : [],
-  };
-  state.calibration.openEyeGaps = Array.isArray(calibrationData.openEyeGaps)
-    ? calibrationData.openEyeGaps.map(Number).filter(Number.isFinite)
-    : Array.isArray(calibrationData.open_eye_gaps)
-      ? calibrationData.open_eye_gaps.map(Number).filter(Number.isFinite)
-      : [];
-
-  state.profile =
-    normalizeCalibrationProfile(calibrationData.profile) ||
-    normalizeCalibrationProfile({
-      ...(calibrationData.coordinates || {}),
-      thresholds: calibrationData.thresholds,
-    }) ||
-    buildProfile();
-
-  if (!state.profile) {
-    throw new Error("Data kalibrasi pasien tidak lengkap.");
-  }
-
-  state.mode = "running";
-  state.directionHistory = [];
-  state.stableDirection = "-";
-  state.lastProgramDirection = "-";
-  resetBlinkState();
-  setActivePatient(patient, true);
-  updateCalibrationBanner();
-  updateDashboard(state.lastFeatures, "PROFIL DIMUAT", "-", state.lastEyeState, state.lastConfidence);
-}
-
-async function openSessionForPatient(patient, notes = "Sesi dibuat dari profil pasien.") {
-  if (!patient || state.backend.disabled) {
-    return null;
-  }
-
-  if (state.backend.sessionId && state.backend.patientId === patient.id) {
-    return state.backend.sessionId;
-  }
-
-  closeBackendSession();
-  state.backend.initializing = true;
-
-  try {
-    const sessionResult = await apiRequest(`/patients/${patient.id}/sessions`, {
-      method: "POST",
-      body: {
-        source: "browser-dashboard",
-        device_label: navigator.userAgent,
-        notes,
-      },
-    });
-
-    state.backend.online = true;
-    state.backend.sessionId = sessionResult.session.id;
-    state.backend.patientId = patient.id;
-    renderActivePatientProfile();
-    return state.backend.sessionId;
-  } catch (error) {
-    state.backend.online = false;
-    reportBackendError(error);
-    return null;
-  } finally {
-    state.backend.initializing = false;
-  }
-}
-
-async function storeBackendEvent(event) {
-  if (state.backend.disabled || !state.backend.sessionId) {
-    return;
-  }
-
-  try {
-    await apiRequest(`/sessions/${state.backend.sessionId}/tracking-events`, {
-      method: "POST",
-      body: {
-        captured_at: new Date().toISOString(),
-        ...event,
-      },
-    });
-  } catch (error) {
-    state.backend.online = false;
-    reportBackendError(error);
-  }
-}
-
-function storeMessageEvent(message, source, status) {
-  storeBackendEvent({
-    event_type: "message",
-    gaze_direction: state.lastDisplayDirection,
-    program_direction: state.lastProgramDirection,
-    eye_state: state.lastEyeState,
-    confidence: state.lastConfidence,
-    blink_count: state.blinkCount,
-    click_status: state.clickStatus,
-    output_message: message,
-    metadata: {
-      source,
-      status,
-      mode: state.mode,
-    },
-  });
-}
-
-function storeTrackingSnapshot(features, displayDirection, programDirection, eyeState, confidence, nowMs) {
-  if (nowMs - state.backend.lastSnapshotAt < TRACKING_SNAPSHOT_INTERVAL_MS) {
-    return;
-  }
-
-  state.backend.lastSnapshotAt = nowMs;
-  storeBackendEvent({
-    event_type: "snapshot",
-    gaze_direction: displayDirection,
-    program_direction: programDirection,
-    eye_state: eyeState,
-    confidence,
-    eye_gap: features ? numberOrNull(features.eyeGap) : null,
-    gaze_ratio: features ? numberOrNull(features.gazeRatio) : null,
-    fps: numberOrNull(state.fps),
-    latency_ms: numberOrNull(state.latency),
-    blink_count: state.blinkCount,
-    click_status: state.clickStatus,
-    output_message: state.output,
-    metadata: {
-      mode: state.mode,
-      face_visible: Boolean(features),
-      stable_direction: state.stableDirection,
-    },
-  });
-}
-
-function closeBackendSession() {
-  if (!state.backend.sessionId || state.backend.disabled) {
-    return;
-  }
-
-  const token = localStorage.getItem("echo_token");
-  fetch(apiUrl(`/sessions/${state.backend.sessionId}`), {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      status: "closed",
-      ended_at: new Date().toISOString(),
-    }),
-    keepalive: true,
-  }).catch(() => {});
-  state.backend.sessionId = null;
-}
-
-function showPatientProfileForm() {
-  const patient = state.backend.activePatient;
-  if (patient) {
-    elements.profileName.value = patient.name || "";
-    elements.profileGender.value = patient.gender || "";
-    elements.profileNik.value = patient.nik || "";
-  }
-  setText(
-    elements.profileSaveNote,
-    patient
-      ? "Data kalibrasi baru akan menggantikan kalibrasi tersimpan untuk pasien ini."
-      : "Isi profil pasien lalu klik Simpan Kalibrasi di panel kanan."
-  );
-  showProfileSection();
-
-  if (elements.profileName) {
-    elements.profileName.focus();
-  }
-}
-
-function hidePatientProfileForm() {
-  setText(elements.profileSaveNote, "Data kalibrasi disimpan manual setelah profil diisi.");
-}
-
-function renderPatientSearchResults(patients) {
-  if (!elements.patientSearchResults) {
-    return;
-  }
-
+function renderPatientList() {
+  if (!elements.patientList) return;
+  const patients = loadStoredPatients();
   if (!patients.length) {
-    elements.patientSearchResults.innerHTML = "<p>Pasien tidak ditemukan.</p>";
+    elements.patientList.innerHTML = '<p class="patient-list-empty">Belum ada pasien tersimpan.</p>';
     return;
   }
-
-  elements.patientSearchResults.innerHTML = patients
-    .map((patient) => {
-      const calibrationLabel = patient.has_calibration ? "Kalibrasi tersimpan" : "Belum ada kalibrasi";
-      return `
-        <button class="patient-result-button" type="button" data-patient-id="${patient.id}">
-          <strong>${escapeHtml(patient.name || "Tanpa nama")}</strong>
-          <span>${escapeHtml(patient.nik || "-")} / ${escapeHtml(patient.gender || "-")}</span>
-          <span>${calibrationLabel}</span>
-        </button>
-      `;
-    })
+  elements.patientList.innerHTML = patients
+    .map((p) => `
+      <button class="patient-list-item" type="button" data-load-patient="${escapeHtml(p.id)}">
+        <span class="patient-list-avatar">${escapeHtml(getInitials(p.name))}</span>
+        <span class="patient-list-info">
+          <strong>${escapeHtml(p.name)}</strong>
+          <small>${escapeHtml(p.nik)} &middot; ${escapeHtml(p.gender)}</small>
+        </span>
+      </button>`)
     .join("");
-}
-
-async function searchPatients(query = "") {
-  if (!elements.patientSearchResults) {
-    return;
-  }
-
-  elements.patientSearchResults.innerHTML = "<p>Mencari pasien...</p>";
-
-  try {
-    const payload = await apiRequest(`/patients?q=${encodeURIComponent(query)}`);
-    renderPatientSearchResults(payload.patients || []);
-  } catch (error) {
-    elements.patientSearchResults.innerHTML = "<p>Backend belum aktif.</p>";
-    reportBackendError(error);
-  }
-}
-
-function schedulePatientSearch() {
-  clearTimeout(state.backend.searchTimer);
-  state.backend.searchTimer = window.setTimeout(() => {
-    searchPatients(elements.patientSearchInput.value);
-  }, PATIENT_SEARCH_DEBOUNCE_MS);
-}
-
-function activateProgram(message = "Program E mulai") {
-  state.mode = "running";
-  state.output = message.toUpperCase();
-  state.directionHistory = [];
-  state.lastProgramDirection = "-";
-  resetBlinkState();
-  setMessage(message, "Sesi", "ok");
-
-  if (state.profile && state.profile.orderedAutomatically) {
-    addLog("Kalibrasi", "Urutan nilai kalibrasi diperbaiki otomatis", "warn");
-  }
-
-  updateCalibrationBanner();
-}
-
-async function savePatientCalibration() {
-  const profile = state.backend.pendingStartProfile || buildProfile();
-  if (!profile) {
-    setText(elements.profileSaveNote, "Kalibrasi belum lengkap. Ambil data Bawah, Tengah, dan Atas dulu.");
-    addLog("Kalibrasi", "Data kalibrasi belum lengkap, profil belum disimpan", "warn");
-    return;
-  }
-
-  const name = elements.profileName.value.trim();
-  const gender = elements.profileGender.value;
-  const nik = elements.profileNik.value.trim();
-
-  if (!name || !gender || !nik) {
-    setText(elements.profileSaveNote, "Nama, jenis kelamin, dan NIK wajib diisi.");
-    return;
-  }
-
-  const submitButton = elements.patientProfileForm.querySelector('button[type="submit"]');
-  if (submitButton) {
-    submitButton.disabled = true;
-  }
-  setText(elements.profileSaveNote, "Menyimpan profil dan data kalibrasi ke backend...");
-
-  try {
-    state.profile = profile;
-    const payload = await apiRequest("/patients", {
-      method: "POST",
-      body: {
-        patient_code: `NIK-${nik}`,
-        name,
-        gender,
-        nik,
-        room: "",
-        bed: "",
-        notes: "Data dibuat dari form profil pasien dashboard E.C.H.O.",
-        calibration_data: serializeCalibrationData(profile),
-      },
-    });
-    const patient = payload.patient;
-    setActivePatient(patient, true);
-    const sessionId = await openSessionForPatient(patient, "Sesi dibuat setelah kalibrasi baru disimpan.");
-    if (!sessionId) {
-      throw new Error("Profil tersimpan, tetapi sesi tracking belum bisa dibuat.");
-    }
-    state.backend.pendingStartProfile = null;
-    setText(elements.profileSaveNote, "Kalibrasi tersimpan di backend. Tekan Mulai untuk menjalankan Program E.");
-    addLog("Backend", `Kalibrasi ${patient.name} tersimpan`, "ok");
-    updateCalibrationBanner();
-    showProfileSection();
-    searchPatients(elements.patientSearchInput ? elements.patientSearchInput.value : "");
-  } catch (error) {
-    setText(elements.profileSaveNote, error.message);
-    reportBackendError(error);
-  } finally {
-    if (submitButton) {
-      submitButton.disabled = false;
-    }
-  }
-}
-
-async function loadPatientProfile(patientId) {
-  try {
-    const payload = await apiRequest(`/patients/${patientId}`);
-    const patient = payload.patient;
-    const sessionId = await openSessionForPatient(patient, "Sesi dibuat dari profil dengan kalibrasi tersimpan.");
-    if (!sessionId) {
-      throw new Error("Profil dimuat, tetapi sesi tracking belum bisa dibuat.");
-    }
-    applyPatientCalibration(patient);
-    setMessage(`Profil ${patient.name} dimuat`, "Cari Pasien", "ok");
-    showProfileSection();
-    sidebar.classList.remove("is-open");
-    document.body.classList.remove("menu-open");
-  } catch (error) {
-    addLog("Cari Pasien", error.message, "warn");
-  }
-}
-
-function syncCanvasSize() {
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width));
-  const height = Math.max(1, Math.round(rect.height));
-
-  if (canvas.width === width && canvas.height === height) {
-    return false;
-  }
-
-  canvas.width = width;
-  canvas.height = height;
-  return true;
 }
 
 function addLog(event, detail, status = "ok") {
   state.logs.unshift([formatTime(), event, detail, status]);
   state.logs = state.logs.slice(0, 8);
   renderLogs();
+  renderAlerts();
+}
+
+function renderAlerts() {
+  if (!elements.alertList) return;
+  const alerts = state.logs.filter(([, , , s]) => s === "warn" || s === "alert");
+  setText(elements.alertCount, alerts.length > 0 ? String(alerts.length) : "0");
+  if (!alerts.length) {
+    elements.alertList.innerHTML = '<div class="alert-row low"><strong>Tidak ada alert</strong><span>Sistem berjalan normal.</span></div>';
+    return;
+  }
+  elements.alertList.innerHTML = alerts
+    .map(([time, event, detail]) => `
+      <div class="alert-row warn">
+        <strong>${escapeHtml(event)}</strong>
+        <span>${escapeHtml(detail)} <small>${escapeHtml(time)}</small></span>
+      </div>`)
+    .join("");
 }
 
 function renderLogs() {
-  if (!elements.logList) {
-    return;
-  }
-
+  if (!elements.logList) return;
   elements.logList.innerHTML = state.logs
     .map(([time, event, detail, status]) => {
       const label = status === "ok" ? "Normal" : status === "warn" ? "Perhatian" : "Alert";
-
       return `
         <div class="log-row" role="row">
           <span role="cell">${escapeHtml(time)}</span>
@@ -856,10 +296,115 @@ function renderLogs() {
     .join("");
 }
 
+function serializeCalibration() {
+  return {
+    samples: {
+      top: [...state.calibration.samples.top],
+      center: [...state.calibration.samples.center],
+      bottom: [...state.calibration.samples.bottom],
+    },
+    openEyeGaps: [...state.calibration.openEyeGaps],
+  };
+}
+
+function showSaveError(msg) {
+  if (!elements.saveError) return;
+  elements.saveError.textContent = msg;
+  elements.saveError.hidden = false;
+}
+
+function handleSavePatient(event) {
+  event.preventDefault();
+  if (elements.saveError) elements.saveError.hidden = true;
+
+  const data = Object.fromEntries(new FormData(elements.saveForm));
+  const name = (data.name || "").trim();
+  const nik = (data.nik || "").trim();
+  const gender = data.gender || "";
+
+  if (!name) { showSaveError("Nama wajib diisi."); return; }
+  if (!/^\d{16}$/.test(nik)) { showSaveError("NIK harus tepat 16 digit angka."); return; }
+  if (!gender) { showSaveError("Jenis kelamin wajib dipilih."); return; }
+
+  const profile = buildProfile();
+  if (!profile) { showSaveError("Data kalibrasi tidak lengkap, ulangi kalibrasi."); return; }
+  state.profile = profile;
+
+  const patient = {
+    id: Date.now().toString(),
+    name,
+    nik,
+    gender,
+    savedAt: new Date().toISOString(),
+    calibration: serializeCalibration(),
+  };
+
+  persistPatient(patient);
+  state.activePatient = patient;
+
+  elements.saveSection.hidden = true;
+  elements.saveForm.reset();
+  renderActivePatient();
+  renderPatientList();
+  addLog("Pasien", `${patient.name} tersimpan`, "ok");
+
+  startProgram();
+}
+
+function renderActivePatient() {
+  if (!elements.activePatientSection) return;
+  const p = state.activePatient;
+  if (!p) {
+    elements.activePatientSection.hidden = true;
+    return;
+  }
+  setText(elements.activeInitials, getInitials(p.name));
+  setText(elements.activeName, p.name);
+  setText(elements.activeMeta, `${p.gender} · NIK ${p.nik}`);
+  elements.activePatientSection.hidden = false;
+}
+
+function loadPatient(id) {
+  const patient = loadStoredPatients().find((p) => p.id === id);
+  if (!patient) return;
+
+  const cal = patient.calibration;
+  state.calibration = createCalibrationState(`Profil ${patient.name} dimuat.`);
+  state.calibration.samples = {
+    top: cal.samples.top.map(Number).filter(Number.isFinite),
+    center: cal.samples.center.map(Number).filter(Number.isFinite),
+    bottom: cal.samples.bottom.map(Number).filter(Number.isFinite),
+  };
+  state.calibration.openEyeGaps = cal.openEyeGaps.map(Number).filter(Number.isFinite);
+
+  const profile = buildProfile();
+  if (!profile) {
+    addLog("Pasien", `Kalibrasi ${patient.name} tidak valid`, "warn");
+    return;
+  }
+  state.profile = profile;
+  state.activePatient = patient;
+
+  if (elements.saveSection) elements.saveSection.hidden = true;
+  renderActivePatient();
+
+  state.mode = "running";
+  state.directionHistory = [];
+  state.lastProgramDirection = "-";
+  resetBlinkState();
+  updateCalibrationBanner();
+  setMessage(`Profil ${patient.name} dimuat`, "Pasien", "ok");
+  addLog("Pasien", `${patient.name} dimuat, program aktif`, "ok");
+
+  sidebar.classList.remove("is-open");
+  document.body.classList.remove("menu-open");
+}
+
 function syncClock() {
   const now = new Date();
   setText(clock, formatTime(now));
   setText(uptime, formatDuration(Date.now() - state.startedAt));
+  setText(elements.sessionDuration, formatDuration(Date.now() - state.startedAt));
 }
 
 function setMessage(message, source = "Pesan pasien", status = "ok") {
@@ -869,38 +414,23 @@ function setMessage(message, source = "Pesan pasien", status = "ok") {
   setText(elements.outputText, message);
   setText(elements.messageTime, "Diterima baru saja");
   addLog(source, message, status);
-  storeMessageEvent(message, source, status);
 }
 
 function point(landmarks, index) {
-  const landmark = landmarks[index];
-  return {
-    x: Number(landmark.x),
-    y: Number(landmark.y),
-  };
+  const lm = landmarks[index];
+  return { x: Number(lm.x), y: Number(lm.y) };
 }
 
 function meanPoint(landmarks, indexes) {
   const total = indexes.reduce(
-    (accumulator, index) => {
-      const current = point(landmarks, index);
-      accumulator.x += current.x;
-      accumulator.y += current.y;
-      return accumulator;
-    },
+    (acc, i) => { const p = point(landmarks, i); acc.x += p.x; acc.y += p.y; return acc; },
     { x: 0, y: 0 }
   );
-
-  return {
-    x: total.x / indexes.length,
-    y: total.y / indexes.length,
-  };
+  return { x: total.x / indexes.length, y: total.y / indexes.length };
 }
 
 function distance(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
 
 function eyeRatio(landmarks, irisIndexes, topIndexes, bottomIndexes, cornerIndexes) {
@@ -909,32 +439,23 @@ function eyeRatio(landmarks, irisIndexes, topIndexes, bottomIndexes, cornerIndex
   const bottom = meanPoint(landmarks, bottomIndexes);
   const cornerA = point(landmarks, cornerIndexes[0]);
   const cornerB = point(landmarks, cornerIndexes[1]);
-
   const verticalGap = Math.max(bottom.y - top.y, 0.0001);
   const horizontalWidth = Math.max(distance(cornerA, cornerB), 0.0001);
-  const ratio = clamp((iris.y - top.y) / verticalGap, -0.5, 1.5);
-  const normalizedGap = Math.abs(bottom.y - top.y) / horizontalWidth;
-
   return {
-    ratio,
-    gap: normalizedGap,
+    ratio: clamp((iris.y - top.y) / verticalGap, -0.5, 1.5),
+    gap: Math.abs(bottom.y - top.y) / horizontalWidth,
     iris,
   };
 }
 
 function extractEyeFeatures(faceLandmarks) {
   const landmarks = faceLandmarks.landmark || faceLandmarks;
-
-  if (!landmarks || landmarks.length <= Math.max(...RIGHT_IRIS)) {
-    return null;
-  }
-
+  if (!landmarks || landmarks.length <= Math.max(...RIGHT_IRIS)) return null;
   const left = eyeRatio(landmarks, LEFT_IRIS, LEFT_TOP, LEFT_BOTTOM, LEFT_CORNERS);
   const right = eyeRatio(landmarks, RIGHT_IRIS, RIGHT_TOP, RIGHT_BOTTOM, RIGHT_CORNERS);
-  const eyePoints = [LEFT_TOP, LEFT_BOTTOM, RIGHT_TOP, RIGHT_BOTTOM, LEFT_IRIS, RIGHT_IRIS].map((group) =>
-    meanPoint(landmarks, group)
+  const eyePoints = [LEFT_TOP, LEFT_BOTTOM, RIGHT_TOP, RIGHT_BOTTOM, LEFT_IRIS, RIGHT_IRIS].map(
+    (group) => meanPoint(landmarks, group)
   );
-
   return {
     landmarks,
     gazeRatio: (left.ratio + right.ratio) / 2,
@@ -946,30 +467,22 @@ function extractEyeFeatures(faceLandmarks) {
 }
 
 function isCalibrationComplete() {
-  return Object.values(state.calibration.samples).every((values) => values.length >= MIN_CALIBRATION_SAMPLES);
+  return Object.values(state.calibration.samples).every((v) => v.length >= MIN_CALIBRATION_SAMPLES);
 }
 
 function buildProfile() {
-  if (!isCalibrationComplete()) {
-    return null;
-  }
-
+  if (!isCalibrationComplete()) return null;
   let top = safeMedian(state.calibration.samples.top);
   let center = safeMedian(state.calibration.samples.center);
   let bottom = safeMedian(state.calibration.samples.bottom);
   let orderedAutomatically = false;
-
   if (!(top < center && center < bottom)) {
     [top, center, bottom] = [top, center, bottom].sort((a, b) => a - b);
     orderedAutomatically = true;
   }
-
   const openGap = safeMedian(state.calibration.openEyeGaps) || 0.16;
-
   return {
-    top,
-    center,
-    bottom,
+    top, center, bottom,
     upperThreshold: center - Math.max((center - top) * DIRECTION_ACTIVATION_RATIO, MIN_DIRECTION_OFFSET),
     lowerThreshold: center + Math.max((bottom - center) * DIRECTION_ACTIVATION_RATIO, MIN_DIRECTION_OFFSET),
     closedThreshold: clamp(openGap * CLOSED_THRESHOLD_FACTOR, MIN_CLOSED_THRESHOLD, MAX_CLOSED_THRESHOLD),
@@ -979,19 +492,11 @@ function buildProfile() {
 }
 
 async function startCalibrationTarget(target) {
-  if (!state.cameraActive) {
-    await startCamera();
-  }
-
-  if (!state.cameraActive) {
-    return;
-  }
-
+  if (!state.cameraActive) await startCamera();
+  if (!state.cameraActive) return;
   const now = performance.now() / 1000;
   state.mode = "calibration";
   state.profile = null;
-  state.backend.calibrationSaved = false;
-  state.backend.pendingStartProfile = null;
   state.directionHistory = [];
   state.stableDirection = "-";
   state.calibration.activeTarget = target;
@@ -1007,14 +512,16 @@ async function startCalibrationTarget(target) {
 function resetCalibration(message = "Kalibrasi diulang. Tekan B, C, atau T.") {
   state.mode = "calibration";
   state.profile = null;
+  state.activePatient = null;
   state.calibration = createCalibrationState(message);
   state.directionHistory = [];
   state.stableDirection = "-";
   state.lastProgramDirection = "-";
   state.output = "MENUNGGU KALIBRASI";
-  state.backend.calibrationSaved = false;
-  state.backend.pendingStartProfile = null;
   resetBlinkState();
+  if (elements.saveSection) elements.saveSection.hidden = true;
+  if (elements.saveError) elements.saveError.hidden = true;
+  renderActivePatient();
   setText(elements.outputText, "Menunggu input pasien");
   setText(elements.currentMessage, "Menunggu input pasien");
   updateActiveGazeMap("-");
@@ -1023,62 +530,51 @@ function resetCalibration(message = "Kalibrasi diulang. Tekan B, C, atau T.") {
 
 function updateCalibration(features, now) {
   const calibration = state.calibration;
-
-  if (!calibration.activeTarget) {
-    return;
-  }
-
+  if (!calibration.activeTarget) return;
   if (features && features.eyeGap >= MIN_OPEN_GAP_FOR_CALIBRATION) {
     calibration.activeSamples.push(features.gazeRatio);
     calibration.openEyeGaps.push(features.eyeGap);
   }
-
-  if (now < calibration.activeEndsAt) {
-    return;
-  }
-
+  if (now < calibration.activeEndsAt) return;
   const target = calibration.activeTarget;
   const label = TARGET_LABEL[target];
-  const sampleCount = calibration.activeSamples.length;
-
-  if (sampleCount >= MIN_CALIBRATION_SAMPLES) {
+  const count = calibration.activeSamples.length;
+  if (count >= MIN_CALIBRATION_SAMPLES) {
     calibration.samples[target] = [...calibration.activeSamples];
-    calibration.message = `Kalibrasi ${label} selesai (${sampleCount} sampel).`;
-    addLog("Kalibrasi", `${label} selesai dengan ${sampleCount} sampel`, "ok");
+    calibration.message = `Kalibrasi ${label} selesai (${count} sampel).`;
+    addLog("Kalibrasi", `${label} selesai dengan ${count} sampel`, "ok");
   } else {
     calibration.samples[target] = [];
     calibration.message = `Kalibrasi ${label} gagal. Wajah/mata kurang terbaca.`;
-    addLog("Kalibrasi", `${label} gagal, sampel hanya ${sampleCount}`, "warn");
+    addLog("Kalibrasi", `${label} gagal, sampel hanya ${count}`, "warn");
   }
-
   calibration.activeTarget = null;
   calibration.activeSamples = [];
   setText(elements.calibrationTime, "Baru saja");
+
+  if (isCalibrationComplete() && !state.activePatient && elements.saveSection) {
+    elements.saveSection.hidden = false;
+  }
 }
 
-async function startProgram() {
-  state.profile = buildProfile() || (state.backend.calibrationSaved ? state.profile : null);
-
+function startProgram() {
+  state.profile = buildProfile();
   if (!state.profile) {
     state.calibration.message = "Kalibrasi belum lengkap. Isi B, C, dan T dulu.";
     addLog("Kalibrasi", "Program belum bisa mulai, data B/C/T belum lengkap", "warn");
     updateCalibrationBanner();
     return;
   }
-
-  if (!state.backend.calibrationSaved) {
-    state.backend.pendingStartProfile = state.profile;
-    addLog("Backend", "Program belum mulai karena kalibrasi belum disimpan", "warn");
-    showPatientProfileForm();
-    setText(elements.profileSaveNote, "Kalibrasi belum tersimpan. Isi profil lalu klik Simpan Kalibrasi.");
-    return;
+  if (state.profile.orderedAutomatically) {
+    addLog("Kalibrasi", "Urutan nilai kalibrasi diperbaiki otomatis", "warn");
   }
-
-  if (state.backend.activePatient && !state.backend.sessionId) {
-    await openSessionForPatient(state.backend.activePatient, "Sesi dibuat dari kalibrasi tersimpan.");
-  }
-
-  activateProgram("Program E mulai");
+  state.mode = "running";
+  state.output = "PROGRAM E MULAI";
+  state.directionHistory = [];
+  state.lastProgramDirection = "-";
+  resetBlinkState();
+  setMessage("Program E aktif — deteksi arah pandangan dimulai", "Sesi", "ok");
+  updateCalibrationBanner();
 }
 
 function resetBlinkState() {
@@ -1090,47 +586,25 @@ function resetBlinkState() {
 }
 
 function classifyDirection(features) {
-  if (!state.profile) {
-    return "-";
-  }
-
-  if (features.gazeRatio < state.profile.upperThreshold) {
-    return "ATAS";
-  }
-
-  if (features.gazeRatio > state.profile.lowerThreshold) {
-    return "BAWAH";
-  }
-
+  if (!state.profile) return "-";
+  if (features.gazeRatio < state.profile.upperThreshold) return "ATAS";
+  if (features.gazeRatio > state.profile.lowerThreshold) return "BAWAH";
   return "TENGAH";
 }
 
 function stableDirection(nextDirection) {
-  if (!nextDirection || nextDirection === "-") {
-    return "-";
-  }
-
+  if (!nextDirection || nextDirection === "-") return "-";
   state.directionHistory.push(nextDirection);
-
-  if (state.directionHistory.length > SMOOTHING_FRAMES) {
-    state.directionHistory.shift();
-  }
-
+  if (state.directionHistory.length > SMOOTHING_FRAMES) state.directionHistory.shift();
   const counts = new Map();
-  let bestDirection = state.directionHistory[0];
+  let best = state.directionHistory[0];
   let bestCount = 0;
-
-  state.directionHistory.forEach((direction) => {
-    const count = (counts.get(direction) || 0) + 1;
-    counts.set(direction, count);
-
-    if (count > bestCount) {
-      bestDirection = direction;
-      bestCount = count;
-    }
+  state.directionHistory.forEach((d) => {
+    const n = (counts.get(d) || 0) + 1;
+    counts.set(d, n);
+    if (n > bestCount) { best = d; bestCount = n; }
   });
-
-  return bestDirection;
+  return best;
 }
 
 function updateBlink(isClosed, now) {
@@ -1140,9 +614,7 @@ function updateBlink(isClosed, now) {
       state.closedStartedAt = now;
       state.longBlinkSent = false;
     }
-
     const closedFor = now - state.closedStartedAt;
-
     if (closedFor >= LONG_CLOSE_SECONDS && !state.longBlinkSent) {
       state.longBlinkSent = true;
       state.quickBlinks = [];
@@ -1151,14 +623,11 @@ function updateBlink(isClosed, now) {
       setMessage("YES", "Merem 5 detik", "alert");
       return "MATA TERTUTUP";
     }
-
     state.clickStatus = `MATA TERTUTUP ${closedFor.toFixed(1)}s`;
     return "MATA TERTUTUP";
   }
 
-  if (!state.eyeClosed) {
-    return "MATA TERBUKA";
-  }
+  if (!state.eyeClosed) return "MATA TERBUKA";
 
   const closedDuration = now - state.closedStartedAt;
   state.eyeClosed = false;
@@ -1171,16 +640,14 @@ function updateBlink(isClosed, now) {
 
   if (closedDuration >= FAST_BLINK_MIN_SECONDS && closedDuration <= FAST_BLINK_MAX_SECONDS) {
     state.blinkCount += 1;
-    state.quickBlinks = state.quickBlinks.filter((blinkAt) => now - blinkAt <= DOUBLE_BLINK_WINDOW_SECONDS);
+    state.quickBlinks = state.quickBlinks.filter((t) => now - t <= DOUBLE_BLINK_WINDOW_SECONDS);
     state.quickBlinks.push(now);
-
     if (state.quickBlinks.length >= 2) {
       state.quickBlinks = [];
       state.clickStatus = "KLIK: KEDIP 2 KALI (NO)";
       setMessage("NO", "Kedip cepat 2 kali", "ok");
       return "MATA TERBUKA";
     }
-
     state.clickStatus = "KEDIP CEPAT 1X";
     return "MATA TERBUKA";
   }
@@ -1191,32 +658,23 @@ function updateBlink(isClosed, now) {
 }
 
 function getCalibrationProgress(now) {
-  const calibration = state.calibration;
-
-  if (!calibration.activeTarget) {
-    return 0;
-  }
-
-  const total = Math.max(calibration.activeEndsAt - calibration.activeStartedAt, 0.001);
-  return clamp((now - calibration.activeStartedAt) / total, 0, 1);
+  const c = state.calibration;
+  if (!c.activeTarget) return 0;
+  const total = Math.max(c.activeEndsAt - c.activeStartedAt, 0.001);
+  return clamp((now - c.activeStartedAt) / total, 0, 1);
 }
 
 function getConfidence(features, eyeState) {
-  if (!features) {
-    return 0;
-  }
-
+  if (!features) return 0;
   const readableEye = clamp((features.eyeGap - 0.025) / 0.12, 0, 1);
   const profileReady = state.profile ? 1 : 0.72;
   const closedPenalty = eyeState === "MATA TERTUTUP" ? 0.74 : 1;
-  const confidence = (58 + readableEye * 34) * profileReady * closedPenalty;
-
-  return Math.round(clamp(confidence, 0, 98));
+  return Math.round(clamp((58 + readableEye * 34) * profileReady * closedPenalty, 0, 98));
 }
 
 function updateActiveGazeMap(directionLabel) {
-  elements.gazeButtons.forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.gazeOption === directionLabel);
+  elements.gazeButtons.forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.gazeOption === directionLabel);
   });
 }
 
@@ -1248,18 +706,23 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
   setText(elements.focus, `${focus}%`);
   setText(elements.response, state.latency ? `${(state.latency / 1000).toFixed(2)} s` : "-");
   setText(elements.blinkRate, `${Math.max(0, state.blinkCount)} sesi`);
+
   const cameraStatusText = state.cameraActive ? `${Math.round(state.fps || 0)} FPS` : "Offline";
   setText(elements.cameraStatus, cameraStatusText);
   const cameraStatusOps = document.querySelector("[data-camera-status-ops]");
   if (cameraStatusOps && cameraStatusOps.textContent !== cameraStatusText) {
     cameraStatusOps.textContent = cameraStatusText;
   }
-  setText(elements.cpuTemp, "-");
+
   setText(elements.deviceScore, hasFace ? `${signal}` : "-");
   setText(elements.trackingQuality, hasFace ? (confidence > 86 ? "Sangat baik" : confidence > 65 ? "Baik" : "Cukup") : "Menunggu");
-  setText(elements.lighting, hasFace ? "Normal" : "Menunggu");
-  setText(elements.alertTime, state.muted ? "Alert disenyapkan" : "-");
-  setText(elements.alertCount, state.muted ? "Senyap" : "Tidak ada");
+
+  const calStatus = state.mode === "running" ? "Siap" : isCalibrationComplete() ? "Lengkap" : "Belum kalibrasi";
+  setText(elements.calibrationStatus, calStatus);
+
+  if (elements.deviceDotCamera) {
+    elements.deviceDotCamera.className = `device-dot ${state.cameraActive ? "active" : "idle"}`;
+  }
   setText(elements.iris468, features ? features.gazeRatio.toFixed(3) : "-");
   setText(elements.iris473, thresholdText);
   setText(elements.eyelidGap, features ? features.eyeGap.toFixed(3) : "-");
@@ -1269,46 +732,25 @@ function updateDashboard(features, displayDirection, programDirection, eyeState,
   updateActiveGazeMap(programDirection);
 }
 
-function updateCalibrationControls() {
-  const isPatientActive = Boolean(state.backend.activePatient && state.backend.calibrationSaved);
-  const shouldDisable = state.mode === "running" && isPatientActive;
-
-  document.querySelectorAll("[data-calibration-target], [data-reset-calibration]").forEach((button) => {
-    button.disabled = shouldDisable;
-    button.title = shouldDisable
-      ? `Profil pasien sedang aktif - Profil ${state.backend.activePatient.name}`
-      : "";
-    button.style.opacity = shouldDisable ? "0.5" : "1";
-    button.style.cursor = shouldDisable ? "not-allowed" : "pointer";
-  });
-}
-
 function updateCalibrationBanner() {
   if (state.mode === "running") {
     elements.calibrationBanner.classList.add("is-hidden");
-    updateCalibrationControls();
     return;
   }
-
   elements.calibrationBanner.classList.remove("is-hidden");
-  updateCalibrationControls();
   const completed = ["bottom", "center", "top"]
-    .map((target) => `${TARGET_LABEL[target]}:${state.calibration.samples[target].length ? "OK" : "--"}`)
+    .map((t) => `${TARGET_LABEL[t]}:${state.calibration.samples[t].length ? "OK" : "--"}`)
     .join("  ");
   const activeSamples = state.calibration.activeTarget ? `  Sampel:${state.calibration.activeSamples.length}` : "";
   const liveReadout = state.lastFeatures
     ? `  Ratio:${state.lastFeatures.gazeRatio.toFixed(3)} Gap:${state.lastFeatures.eyeGap.toFixed(3)}`
     : "";
-
   setText(elements.calibrationTitle, state.calibration.activeTarget ? "Sedang Kalibrasi" : "Mode Kalibrasi");
   setText(elements.calibrationDetail, `${state.calibration.message}  ${completed}${activeSamples}${liveReadout}`);
 }
 
 function setOverlay(title, detail, showButton = true) {
-  if (!elements.cameraOverlay) {
-    return;
-  }
-
+  if (!elements.cameraOverlay) return;
   elements.cameraOverlay.classList.remove("is-hidden");
   elements.cameraOverlay.querySelector("strong").textContent = title;
   elements.cameraOverlay.querySelector("span").textContent = detail;
@@ -1323,16 +765,11 @@ function setCameraFullscreenState(isFullscreen) {
   state.cameraFullscreen = isFullscreen;
   document.body.classList.toggle("camera-fullscreen-active", isFullscreen);
   cameraFrame.classList.toggle("is-camera-fullscreen", isFullscreen);
-
   const label = isFullscreen ? "Minimize kamera" : "Fullscreen kamera";
   cameraFullscreenButton.setAttribute("aria-label", label);
   cameraFullscreenButton.title = label;
-
   syncCanvasSize();
-
-  if (!state.cameraActive) {
-    drawIdleView();
-  }
+  if (!state.cameraActive) drawIdleView();
 }
 
 function isCameraFullscreenActive() {
@@ -1340,45 +777,34 @@ function isCameraFullscreenActive() {
 }
 
 async function enterCameraFullscreen() {
-  if (isCameraFullscreenActive()) {
-    return;
-  }
-
+  if (isCameraFullscreenActive()) return;
   try {
     if (cameraFrame.requestFullscreen) {
       await cameraFrame.requestFullscreen();
     } else {
       state.fallbackFullscreen = true;
     }
-  } catch (error) {
+  } catch {
     state.fallbackFullscreen = true;
   }
-
   setCameraFullscreenState(true);
 }
 
 async function exitCameraFullscreen() {
   state.fallbackFullscreen = false;
-
   if (document.fullscreenElement === cameraFrame && document.exitFullscreen) {
     await document.exitFullscreen();
     return;
   }
-
   setCameraFullscreenState(false);
 }
 
 function handleCameraFullscreenChange() {
-  const isFullscreen = isCameraFullscreenActive();
-  setCameraFullscreenState(isFullscreen);
+  setCameraFullscreenState(isCameraFullscreenActive());
 }
 
 function toggleCameraFullscreen() {
-  if (isCameraFullscreenActive()) {
-    exitCameraFullscreen();
-    return;
-  }
-
+  if (isCameraFullscreenActive()) { exitCameraFullscreen(); return; }
   enterCameraFullscreen();
 }
 
@@ -1387,10 +813,7 @@ function isMediaPipeReady() {
 }
 
 async function startCamera() {
-  if (state.cameraActive || state.cameraStarting) {
-    return;
-  }
-
+  if (state.cameraActive || state.cameraStarting) return;
   state.cameraStarting = true;
   setOverlay("Membuka kamera...", "Izinkan akses kamera di browser untuk melihat wajah asli.", false);
 
@@ -1409,14 +832,12 @@ async function startCamera() {
     faceMesh = new window.FaceMesh({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
     });
-
     faceMesh.setOptions({
       maxNumFaces: 1,
       refineLandmarks: true,
       minDetectionConfidence: 0.65,
       minTrackingConfidence: 0.7,
     });
-
     faceMesh.onResults(handleFaceResults);
 
     camera = new window.Camera(video, {
@@ -1436,26 +857,25 @@ async function startCamera() {
     state.cameraActive = true;
     state.cameraStarting = false;
     hideOverlay();
-    addLog("Tracking", "Kamera asli aktif dengan FaceMesh", "ok");
+    addLog("Tracking", "Kamera aktif dengan FaceMesh", "ok");
   } catch (error) {
     state.cameraStarting = false;
-    console.error('Camera error:', error);
-    setOverlay("Kamera gagal aktif", "Buka halaman dari localhost/HTTPS dan pastikan izin kamera diberikan. Error: " + (error.message || error), true);
+    setOverlay(
+      "Kamera gagal aktif",
+      "Buka halaman dari localhost/HTTPS dan pastikan izin kamera diberikan. Error: " + (error.message || error),
+      true
+    );
     addLog("Tracking", `Kamera gagal aktif: ${error.message || "izin ditolak"}`, "warn");
   }
 }
 
 function updateFps(nowMs) {
   if (state.lastFrameAt) {
-    const instantFps = 1000 / Math.max(nowMs - state.lastFrameAt, 1);
-    state.fps = state.fps ? state.fps * 0.8 + instantFps * 0.2 : instantFps;
+    const instant = 1000 / Math.max(nowMs - state.lastFrameAt, 1);
+    state.fps = state.fps ? state.fps * 0.8 + instant * 0.2 : instant;
   }
-
   state.lastFrameAt = nowMs;
-
-  if (state.lastInferenceStartedAt) {
-    state.latency = nowMs - state.lastInferenceStartedAt;
-  }
+  if (state.lastInferenceStartedAt) state.latency = nowMs - state.lastInferenceStartedAt;
 }
 
 function handleFaceResults(results) {
@@ -1468,9 +888,7 @@ function handleFaceResults(results) {
   state.faceVisible = Boolean(features);
   state.lastFeatures = features;
 
-  if (state.mode === "calibration") {
-    updateCalibration(features, now);
-  }
+  if (state.mode === "calibration") updateCalibration(features, now);
 
   let displayDirection = "-";
   let programDirection = "-";
@@ -1486,15 +904,14 @@ function handleFaceResults(results) {
 
       if (displayDirection === "ATAS" || displayDirection === "BAWAH") {
         programDirection = displayDirection;
-
         if (
           programDirection !== state.lastProgramDirection &&
           nowMs - state.lastAutoMessageAt >= MESSAGE_COOLDOWN_MS
         ) {
           state.lastProgramDirection = programDirection;
           state.lastAutoMessageAt = nowMs;
-          const direction = directionsByLabel.get(programDirection);
-          setMessage(direction.message, `Arah pandangan ${programDirection}`, "ok");
+          const dir = directionsByLabel.get(programDirection);
+          setMessage(dir.message, `Arah pandangan ${programDirection}`, "ok");
         }
       }
     } else {
@@ -1513,34 +930,33 @@ function handleFaceResults(results) {
   updateDashboard(features, displayDirection, programDirection, eyeState, confidence);
   updateCalibrationBanner();
   drawTrackingView(results.image || video, features, displayDirection, programDirection, eyeState, confidence, now);
-  storeTrackingSnapshot(features, displayDirection, programDirection, eyeState, confidence, nowMs);
+}
+
+function syncCanvasSize() {
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  if (canvas.width === w && canvas.height === h) return false;
+  canvas.width = w;
+  canvas.height = h;
+  return true;
 }
 
 function getCanvasMap(source) {
-  const sourceWidth = source.videoWidth || source.width || 640;
-  const sourceHeight = source.videoHeight || source.height || 480;
-  const scale = Math.max(canvas.width / sourceWidth, canvas.height / sourceHeight);
-  const drawWidth = sourceWidth * scale;
-  const drawHeight = sourceHeight * scale;
-  const offsetX = (canvas.width - drawWidth) / 2;
-  const offsetY = (canvas.height - drawHeight) / 2;
-
-  return {
-    sourceWidth,
-    sourceHeight,
-    scale,
-    drawWidth,
-    drawHeight,
-    offsetX,
-    offsetY,
-  };
+  const sw = source.videoWidth || source.width || 640;
+  const sh = source.videoHeight || source.height || 480;
+  const scale = Math.max(canvas.width / sw, canvas.height / sh);
+  const dw = sw * scale;
+  const dh = sh * scale;
+  const ox = (canvas.width - dw) / 2;
+  const oy = (canvas.height - dh) / 2;
+  return { sourceWidth: sw, sourceHeight: sh, scale, drawWidth: dw, drawHeight: dh, offsetX: ox, offsetY: oy };
 }
 
-function mapPointToCanvas(pointValue, map) {
-  const rawX = map.offsetX + pointValue.x * map.sourceWidth * map.scale;
+function mapPointToCanvas(p, map) {
+  const rawX = map.offsetX + p.x * map.sourceWidth * map.scale;
   const x = MIRROR_CAMERA ? canvas.width - rawX : rawX;
-  const y = map.offsetY + pointValue.y * map.sourceHeight * map.scale;
-
+  const y = map.offsetY + p.y * map.sourceHeight * map.scale;
   return { x, y };
 }
 
@@ -1550,26 +966,13 @@ function drawCameraFrame(source, map) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     return;
   }
-
   ctx.save();
-
-  if (MIRROR_CAMERA) {
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
-  }
-
+  if (MIRROR_CAMERA) { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
   ctx.drawImage(
-    source,
-    0,
-    0,
-    map.sourceWidth,
-    map.sourceHeight,
+    source, 0, 0, map.sourceWidth, map.sourceHeight,
     MIRROR_CAMERA ? -map.offsetX - map.drawWidth + canvas.width : map.offsetX,
-    map.offsetY,
-    map.drawWidth,
-    map.drawHeight
+    map.offsetY, map.drawWidth, map.drawHeight
   );
-
   ctx.restore();
 }
 
@@ -1577,50 +980,40 @@ function drawTrackingView(source, features, displayDirection, programDirection, 
   syncCanvasSize();
   const map = getCanvasMap(source);
   state.lastCanvasMap = map;
-
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawCameraFrame(source, map);
   drawCameraOverlays(features, map, displayDirection, programDirection, eyeState, confidence, now);
 }
 
 function drawCameraOverlays(features, map, displayDirection, programDirection, eyeState, confidence, now) {
-  const width = canvas.width;
-  const height = canvas.height;
-
+  const w = canvas.width;
+  const h = canvas.height;
   ctx.fillStyle = "rgba(5, 16, 19, 0.72)";
-  ctx.fillRect(0, 0, width, 142);
-  ctx.fillRect(0, height - 74, width, 74);
+  ctx.fillRect(0, 0, w, 142);
+  ctx.fillRect(0, h - 74, w, 74);
 
-  if (features) {
-    drawEyePoints(features, map);
-  }
+  if (features) drawEyePoints(features, map);
 
   if (state.mode === "calibration") {
     const completed = ["bottom", "center", "top"]
-      .map((target) => `${TARGET_LABEL[target]}: ${state.calibration.samples[target].length ? "OK" : "--"}`)
+      .map((t) => `${TARGET_LABEL[t]}: ${state.calibration.samples[t].length ? "OK" : "--"}`)
       .join(" | ");
-
     drawTextBlock(
       [
         "MODE KALIBRASI - lihat sesuai tombol selama data diambil",
-        "B=bawah  C=center  T=atas  S=mulai setelah tersimpan  R=ulang",
+        "B=bawah  C=center  T=atas  S=mulai  R=ulang",
         state.calibration.message,
         completed,
       ],
-      18,
-      30
+      18, 30
     );
-
-    if (state.calibration.activeTarget) {
-      drawProgressBar(18, 112, width - 36, 16, getCalibrationProgress(now));
-    }
+    if (state.calibration.activeTarget) drawProgressBar(18, 112, w - 36, 16, getCalibrationProgress(now));
   } else {
     const ratioText = features ? features.gazeRatio.toFixed(3) : "-";
     const gapText = features ? features.eyeGap.toFixed(3) : "-";
     const thresholdText = state.profile
       ? `atas<${state.profile.upperThreshold.toFixed(3)} bawah>${state.profile.lowerThreshold.toFixed(3)}`
       : "-";
-
     drawTextBlock(
       [
         "PROGRAM E AKTIF - dua arah: ATAS / BAWAH",
@@ -1628,16 +1021,13 @@ function drawCameraOverlays(features, map, displayDirection, programDirection, e
         `MATA: ${eyeState}      OUTPUT: ${state.output}`,
         `ratio=${ratioText}  gap=${gapText}  conf=${confidence}%  threshold=${thresholdText}`,
       ],
-      18,
-      30
+      18, 30
     );
   }
 
   drawTextBlock(
     ["YES = mata tertutup 5 detik     NO = kedip cepat 2 kali", "Tekan R untuk kalibrasi ulang."],
-    18,
-    height - 46,
-    0.55
+    18, h - 46, 0.55
   );
 }
 
@@ -1645,10 +1035,7 @@ function drawTextBlock(lines, x, y, scale = 0.58) {
   ctx.font = `${Math.round(scale * 28)}px Consolas, 'Courier New', monospace`;
   ctx.textBaseline = "top";
   ctx.fillStyle = "#f5f5f5";
-
-  lines.forEach((line, index) => {
-    ctx.fillText(line, x, y + index * 24);
-  });
+  lines.forEach((line, i) => ctx.fillText(line, x, y + i * 24));
 }
 
 function drawProgressBar(x, y, width, height, progress) {
@@ -1661,19 +1048,17 @@ function drawProgressBar(x, y, width, height, progress) {
 
 function drawEyePoints(features, map) {
   ctx.fillStyle = "#35e0ac";
-
   features.eyePoints.forEach((item) => {
-    const mapped = mapPointToCanvas(item, map);
+    const p = mapPointToCanvas(item, map);
     ctx.beginPath();
-    ctx.arc(mapped.x, mapped.y, 4, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
     ctx.fill();
   });
-
   [features.leftIris, features.rightIris].forEach((item) => {
-    const mapped = mapPointToCanvas(item, map);
+    const p = mapPointToCanvas(item, map);
     ctx.fillStyle = "#00b4ff";
     ctx.beginPath();
-    ctx.arc(mapped.x, mapped.y, 7, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = 2;
@@ -1693,29 +1078,7 @@ function drawIdleView() {
   ctx.fillText("Deteksi akan memakai FaceMesh seperti logika program Python.", 42, 108);
 }
 
-async function logout() {
-  closeBackendSession();
-  const token = localStorage.getItem("echo_token");
-  if (token) {
-    try {
-      await fetch(apiUrl("/auth/logout"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        keepalive: true,
-      });
-    } catch {}
-  }
-  localStorage.removeItem("echo_token");
-  window.location.replace("login.html");
-}
-
-const logoutButton = document.querySelector("[data-logout]");
-if (logoutButton) {
-  logoutButton.addEventListener("click", logout);
-}
+// ── Event listeners ───────────────────────────────────────────────────────────
 
 menuButton.addEventListener("click", () => {
   const isOpen = sidebar.classList.toggle("is-open");
@@ -1726,237 +1089,109 @@ navLinks.forEach((link) => {
   link.addEventListener("click", () => {
     navLinks.forEach((item) => item.classList.remove("is-active"));
     link.classList.add("is-active");
-
-    if (link.hasAttribute("data-patient-search-toggle")) {
-      elements.patientSearchInput.focus();
-      searchPatients(elements.patientSearchInput.value);
-      return;
-    }
-
     sidebar.classList.remove("is-open");
     document.body.classList.remove("menu-open");
   });
 });
 
-try {
-  document.querySelectorAll("[data-command]").forEach((button) => {
-    button.addEventListener("click", () => {
-      setMessage(button.dataset.command, "Input manual");
-    });
-  });
+document.querySelectorAll("[data-command]").forEach((btn) => {
+  btn.addEventListener("click", () => setMessage(btn.dataset.command, "Input manual"));
+});
 
-  const clearMessageButton = document.querySelector("[data-clear-message]");
-  if (clearMessageButton) {
-    clearMessageButton.addEventListener("click", () => {
-      setMessage("Menunggu input pasien", "Output");
-    });
-  }
-
-  const calibrateButton = document.querySelector("[data-calibrate]");
-  if (calibrateButton) {
-    calibrateButton.addEventListener("click", () => {
-      if (state.backend.activePatient && state.backend.calibrationSaved) {
-        const confirmed = confirm(
-          `Anda yakin ingin mulai kalibrasi baru untuk ${state.backend.activePatient.name}?\n\n` +
-          `Ini akan menghapus kalibrasi tersimpan saat ini.`
-        );
-        if (!confirmed) {
-          return;
-        }
-        setActivePatient(null, false);
-      }
-      
-      resetCalibration("Kalibrasi diulang. Tekan B, C, atau T.");
-      startCamera();
-      addLog("Kalibrasi", "Mode kalibrasi aktif", "ok");
-    });
-  }
-} catch (error) {
-  console.error('Error setting up event listeners:', error);
+const clearMessageButton = document.querySelector("[data-clear-message]");
+if (clearMessageButton) {
+  clearMessageButton.addEventListener("click", () => setMessage("Menunggu input pasien", "Output"));
 }
 
-try {
-  document.querySelectorAll("[data-calibration-target]").forEach((button) => {
-    button.addEventListener("click", () => {
-      if (state.backend.activePatient && state.backend.calibrationSaved && state.mode === "running") {
-        const confirmed = confirm(
-          `Profil ${state.backend.activePatient.name} sedang aktif.\n\n` +
-          `Mulai kalibrasi baru akan menghapus profil aktif saat ini. Lanjutkan?`
-        );
-        if (!confirmed) {
-          return;
-        }
-        setActivePatient(null, false);
-      }
-      
-      startCalibrationTarget(button.dataset.calibrationTarget);
-    });
+const calibrateButton = document.querySelector("[data-calibrate]");
+if (calibrateButton) {
+  calibrateButton.addEventListener("click", () => {
+    resetCalibration("Kalibrasi diulang. Tekan B, C, atau T.");
+    startCamera();
+    addLog("Kalibrasi", "Mode kalibrasi aktif", "ok");
   });
+}
 
-  const startProgramButton = document.querySelector("[data-start-program]");
-  if (startProgramButton) {
-    startProgramButton.addEventListener("click", () => {
-      startProgram();
-    });
-  }
+document.querySelectorAll("[data-calibration-target]").forEach((btn) => {
+  btn.addEventListener("click", () => startCalibrationTarget(btn.dataset.calibrationTarget));
+});
 
-  const resetCalibrationButton = document.querySelector("[data-reset-calibration]");
-  if (resetCalibrationButton) {
-    resetCalibrationButton.addEventListener("click", () => {
-      if (state.backend.activePatient && state.backend.calibrationSaved) {
-        const confirmed = confirm(
-          `Anda yakin ingin ulang kalibrasi untuk ${state.backend.activePatient.name}?\n\n` +
-          `Ini akan menghapus kalibrasi tersimpan dan memasuki mode kalibrasi baru.`
-        );
-        if (!confirmed) {
-          return;
-        }
-        setActivePatient(null, false);
-      }
-      
-      resetCalibration();
-      startCamera();
-      addLog("Kalibrasi", "Kalibrasi diulang", "ok");
-    });
-  }
+const startProgramButton = document.querySelector("[data-start-program]");
+if (startProgramButton) {
+  startProgramButton.addEventListener("click", startProgram);
+}
 
-  if (elements.startCamera) {
-    elements.startCamera.addEventListener("click", () => {
-      startCamera();
-    });
-  }
+const resetCalibrationButton = document.querySelector("[data-reset-calibration]");
+if (resetCalibrationButton) {
+  resetCalibrationButton.addEventListener("click", () => {
+    resetCalibration();
+    startCamera();
+    addLog("Kalibrasi", "Kalibrasi diulang", "ok");
+  });
+}
 
-  if (cameraFullscreenButton) {
-    cameraFullscreenButton.addEventListener("click", () => {
-      toggleCameraFullscreen();
-    });
-  }
-} catch (error) {
-  console.error('Error setting up calibration and camera listeners:', error);
+if (elements.startCamera) {
+  elements.startCamera.addEventListener("click", startCamera);
+}
+
+if (elements.saveForm) {
+  elements.saveForm.addEventListener("submit", handleSavePatient);
+}
+
+if (elements.patientList) {
+  elements.patientList.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-load-patient]");
+    if (btn) loadPatient(btn.dataset.loadPatient);
+  });
+}
+
+const clearActivePatientBtn = document.querySelector("[data-clear-active-patient]");
+if (clearActivePatientBtn) {
+  clearActivePatientBtn.addEventListener("click", () => {
+    resetCalibration();
+    addLog("Pasien", "Pasien aktif dihapus, kalibrasi diulang", "ok");
+  });
+}
+
+if (cameraFullscreenButton) {
+  cameraFullscreenButton.addEventListener("click", toggleCameraFullscreen);
 }
 
 document.addEventListener("fullscreenchange", handleCameraFullscreenChange);
 
-try {
-  if (elements.patientSearchInput) {
-    elements.patientSearchInput.addEventListener("focus", () => {
-      searchPatients(elements.patientSearchInput.value);
-    });
-
-    elements.patientSearchInput.addEventListener("input", schedulePatientSearch);
-  }
-
-  if (elements.patientSearchResults) {
-    elements.patientSearchResults.addEventListener("click", (event) => {
-      const target = event.target instanceof Element ? event.target : event.target.parentElement;
-      const button = target ? target.closest("[data-patient-id]") : null;
-      if (!button) {
-        return;
-      }
-
-      loadPatientProfile(button.dataset.patientId);
-    });
-  }
-
-  if (elements.patientProfileForm) {
-    elements.patientProfileForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      savePatientCalibration();
-    });
-  }
-
-  document.querySelectorAll("[data-close-patient-profile]").forEach((button) => {
-    button.addEventListener("click", hidePatientProfileForm);
+const toggleAlertButton = document.querySelector("[data-toggle-alert]");
+if (toggleAlertButton) {
+  toggleAlertButton.addEventListener("click", () => {
+    state.muted = !state.muted;
+    addLog("Alert", state.muted ? "Alert disenyapkan" : "Alert diaktifkan kembali", state.muted ? "warn" : "ok");
+    updateDashboard(state.lastFeatures, state.lastDisplayDirection, state.lastProgramDirection, state.lastEyeState, state.lastConfidence);
   });
-} catch (error) {
-  console.error('Error setting up patient search listeners:', error);
 }
 
 window.addEventListener("resize", () => {
-  const resized = syncCanvasSize();
-
-  if (resized && !state.cameraActive) {
-    drawIdleView();
-  }
+  if (syncCanvasSize() && !state.cameraActive) drawIdleView();
 });
 
-window.addEventListener("beforeunload", closeBackendSession);
+document.addEventListener("keydown", (event) => {
+  const tag = document.activeElement ? document.activeElement.tagName : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
-try {
-  const toggleAlertButton = document.querySelector("[data-toggle-alert]");
-  if (toggleAlertButton) {
-    toggleAlertButton.addEventListener("click", () => {
-      state.muted = !state.muted;
-      addLog("Alert", state.muted ? "Alert disenyapkan" : "Alert diaktifkan kembali", state.muted ? "warn" : "ok");
-      updateDashboard(
-        state.lastFeatures,
-        state.lastDisplayDirection,
-        state.lastProgramDirection,
-        state.lastEyeState,
-        state.lastConfidence
-      );
-    });
-  }
+  const key = event.key.toLowerCase();
 
-  const refreshDeviceButton = document.querySelector("[data-refresh-device]");
-  if (refreshDeviceButton) {
-    refreshDeviceButton.addEventListener("click", () => {
-      addLog("Perangkat", "Status perangkat diperbarui", "ok");
-    });
-  }
+  if (key === "escape" && state.fallbackFullscreen) { exitCameraFullscreen(); return; }
+  if (TARGET_BY_KEY[key]) { startCalibrationTarget(TARGET_BY_KEY[key]); return; }
+  if (key === "s") { startProgram(); return; }
+  if (key === "r") { resetCalibration(); addLog("Kalibrasi", "Kalibrasi diulang", "ok"); }
+});
 
-  const exportLogButton = document.querySelector("[data-export-log]");
-  if (exportLogButton) {
-    exportLogButton.addEventListener("click", () => {
-      addLog("Log", "Riwayat sesi disiapkan untuk export", "ok");
-    });
-  }
+// ── Init ──────────────────────────────────────────────────────────────────────
 
-  document.addEventListener("keydown", (event) => {
-    // Abaikan pintasan jika user sedang mengetik di input form
-    const tag = document.activeElement ? document.activeElement.tagName : "";
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
-      return;
-    }
-
-    const key = event.key.toLowerCase();
-
-    if (key === "escape" && state.fallbackFullscreen) {
-      exitCameraFullscreen();
-      return;
-    }
-
-    if (TARGET_BY_KEY[key]) {
-      startCalibrationTarget(TARGET_BY_KEY[key]);
-      return;
-    }
-
-    if (key === "s") {
-      startProgram();
-      return;
-    }
-
-    if (key === "r") {
-      resetCalibration();
-      addLog("Kalibrasi", "Kalibrasi diulang", "ok");
-    }
-  });
-} catch (error) {
-  console.error('Error setting up remaining event listeners:', error);
-}
-
-// Inisialisasi Aplikasi Utama
-try {
-  renderLogs();
-  syncClock();
-  drawIdleView();
-  updateCalibrationBanner();
-  updateDashboard(null, "-", "-", "WAJAH TIDAK TERBACA", 0);
-  renderActivePatientProfile();
-  searchPatients();
-
-  setInterval(syncClock, 1000);
-} catch (error) {
-  console.error('Error initializing application:', error);
-  addLog('System', 'Error initializing app: ' + error.message, 'warn');
-}
+renderLogs();
+renderAlerts();
+renderPatientList();
+renderActivePatient();
+syncClock();
+drawIdleView();
+updateCalibrationBanner();
+updateDashboard(null, "-", "-", "WAJAH TIDAK TERBACA", 0);
+setInterval(syncClock, 1000);

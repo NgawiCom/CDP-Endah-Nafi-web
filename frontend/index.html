@@ -9,7 +9,6 @@
       content="Dashboard monitoring E.C.H.O untuk pemantauan deteksi mata, status perangkat, dan pesan pasien non-verbal."
     >
     <link rel="stylesheet" href="styles.css">
-    <script>if(!localStorage.getItem("echo_token"))window.location.replace("login.html");</script>
   </head>
   <body>
     <div class="app-shell">
@@ -31,27 +30,18 @@
             <span class="nav-icon tracking-icon" aria-hidden="true"></span>
             Tracking
           </a>
-          <a href="#patient-search" data-patient-search-toggle>
-            <span class="nav-icon patient-icon" aria-hidden="true"></span>
-            Cari Pasien
-          </a>
           <a href="#pesan">
             <span class="nav-icon message-icon" aria-hidden="true"></span>
             Pesan
           </a>
         </nav>
 
-        <section class="patient-search-panel" id="patient-search" aria-label="Cari pasien tersimpan">
-          <label for="patientSearchInput">Cari Pasien</label>
-          <input
-            id="patientSearchInput"
-            type="search"
-            placeholder="Nama atau NIK"
-            autocomplete="off"
-            data-patient-search-input
-          >
-          <div class="patient-search-results" data-patient-search-results>
-            <p>Masukkan nama atau NIK.</p>
+        <section class="patient-list-panel" aria-label="Pasien tersimpan">
+          <div class="patient-list-header">
+            <span>Pasien Tersimpan</span>
+          </div>
+          <div class="patient-list-items" data-patient-list>
+            <p class="patient-list-empty">Belum ada pasien tersimpan.</p>
           </div>
         </section>
 
@@ -70,7 +60,7 @@
             <span></span>
           </button>
           <div class="page-title">
-            <p>Profil pasien & kalibrasi</p>
+            <p>Kalibrasi &amp; monitoring</p>
             <h1>Monitoring Pasien Non-Verbal</h1>
           </div>
           <div class="topbar-actions">
@@ -82,7 +72,6 @@
               <span class="target-icon" aria-hidden="true"></span>
               <span class="button-text">Kalibrasi</span>
             </button>
-            <button class="ghost-button" type="button" data-logout aria-label="Keluar">Keluar</button>
           </div>
         </header>
 
@@ -147,7 +136,7 @@
                 </div>
                 <div class="calibration-banner" data-calibration-banner>
                   <strong data-calibration-title>Kalibrasi belum lengkap</strong>
-                  <span data-calibration-detail>Ambil Bawah, Tengah, Atas, lalu simpan kalibrasi di panel kanan.</span>
+                  <span data-calibration-detail>Ambil Bawah, Tengah, Atas, lalu tekan Mulai.</span>
                 </div>
                 <div class="camera-hud">
                   <span>FPS <strong data-fps>-</strong></span>
@@ -166,8 +155,8 @@
                   <strong data-latency>-</strong>
                 </div>
                 <div>
-                  <span>Lighting</span>
-                  <strong data-lighting>Menunggu</strong>
+                  <span>Kalibrasi</span>
+                  <strong data-calibration-status>Belum kalibrasi</strong>
                 </div>
               </div>
               <div class="feature-strip" aria-label="Fitur MediaPipe">
@@ -194,91 +183,13 @@
               </div>
             </article>
 
-            <article class="panel command-panel patient-workflow-panel" id="profile" data-profile-section>
+            <article class="panel command-panel" id="profile">
               <div class="panel-header">
                 <div>
-                  <span class="card-label">Profil & Kalibrasi</span>
-                  <h2>Data Pasien</h2>
-                </div>
-                <span class="status-badge warning" data-profile-save-status>Belum dipilih</span>
-              </div>
-
-              <form class="inline-profile-form" data-patient-profile-form>
-                <div class="profile-form-grid">
-                  <label>
-                    <span>Nama</span>
-                    <input type="text" name="name" autocomplete="name" required data-profile-name>
-                  </label>
-                  <label>
-                    <span>Jenis Kelamin</span>
-                    <select name="gender" required data-profile-gender>
-                      <option value="">Pilih</option>
-                      <option value="Laki-laki">Laki-laki</option>
-                      <option value="Perempuan">Perempuan</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>NIK</span>
-                    <input type="text" name="nik" inputmode="numeric" autocomplete="off" required pattern="[0-9]{16}" maxlength="16" title="NIK harus 16 digit angka" data-profile-nik>
-                  </label>
-                </div>
-                <p class="profile-save-note" data-profile-save-note>
-                  Data kalibrasi disimpan manual setelah profil diisi.
-                </p>
-                <button class="primary-button save-calibration-button" type="submit" data-save-calibration>
-                  Simpan Kalibrasi
-                </button>
-              </form>
-
-              <div class="profile-overview">
-                <div class="profile-identity">
-                  <span class="profile-avatar" data-profile-initials>--</span>
-                  <div>
-                    <strong data-profile-display-name>Belum ada pasien aktif</strong>
-                    <span data-profile-display-meta>Pilih pasien dari sidebar atau simpan kalibrasi baru.</span>
-                  </div>
-                </div>
-
-                <div class="profile-facts" aria-label="Detail profil pasien aktif">
-                  <div>
-                    <span>Nama</span>
-                    <strong data-profile-detail-name>-</strong>
-                  </div>
-                  <div>
-                    <span>Jenis Kelamin</span>
-                    <strong data-profile-detail-gender>-</strong>
-                  </div>
-                  <div>
-                    <span>NIK</span>
-                    <strong data-profile-detail-nik>-</strong>
-                  </div>
-                  <div>
-                    <span>Status Backend</span>
-                    <strong data-profile-backend-status>Belum tersimpan</strong>
-                  </div>
+                  <span class="card-label">Kontrol</span>
+                  <h2>Kalibrasi &amp; Pesan</h2>
                 </div>
               </div>
-
-              <div class="calibration-profile-grid" aria-label="Data kalibrasi tersimpan">
-                <div>
-                  <span>Koordinat Atas</span>
-                  <strong data-saved-calibration-top>-</strong>
-                </div>
-                <div>
-                  <span>Koordinat Tengah</span>
-                  <strong data-saved-calibration-center>-</strong>
-                </div>
-                <div>
-                  <span>Koordinat Bawah</span>
-                  <strong data-saved-calibration-bottom>-</strong>
-                </div>
-                <div>
-                  <span>Threshold</span>
-                  <strong data-saved-calibration-threshold>-</strong>
-                </div>
-              </div>
-
-              <div class="panel-divider"></div>
 
               <div class="message-output">
                 <span>Output Aktif</span>
@@ -294,11 +205,11 @@
               <div class="gaze-map" aria-label="Pemetaan pesan arah pandangan">
                 <button type="button" data-gaze-option="ATAS" data-command="Arah atas terdeteksi">
                   <span>Atas</span>
-                  <strong>Program E</strong>
+                  <strong>Arah atas terdeteksi</strong>
                 </button>
                 <button type="button" data-gaze-option="BAWAH" data-command="Arah bawah terdeteksi">
                   <span>Bawah</span>
-                  <strong>Program E</strong>
+                  <strong>Arah bawah terdeteksi</strong>
                 </button>
               </div>
 
@@ -324,6 +235,53 @@
                 <button type="button" data-start-program>Mulai</button>
                 <button type="button" data-reset-calibration>Ulang</button>
               </div>
+
+              <div class="save-calibration-section" data-save-section hidden>
+                <div class="panel-divider"></div>
+                <div class="panel-header">
+                  <div>
+                    <span class="card-label">Kalibrasi Selesai</span>
+                    <h2>Simpan Data Pasien</h2>
+                  </div>
+                </div>
+                <form class="inline-profile-form" data-save-form novalidate>
+                  <div class="profile-form-grid">
+                    <label>
+                      <span>Nama Lengkap</span>
+                      <input type="text" name="name" autocomplete="name" required>
+                    </label>
+                    <label>
+                      <span>Jenis Kelamin</span>
+                      <select name="gender" required>
+                        <option value="">Pilih</option>
+                        <option value="Laki-laki">Laki-laki</option>
+                        <option value="Perempuan">Perempuan</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>NIK</span>
+                      <input type="text" name="nik" inputmode="numeric" pattern="[0-9]{16}" maxlength="16" title="NIK harus 16 digit angka" required>
+                    </label>
+                  </div>
+                  <p class="profile-save-note" data-save-error hidden></p>
+                  <button class="primary-button save-calibration-button" type="submit">Simpan Kalibrasi</button>
+                </form>
+              </div>
+
+              <div data-active-patient-section hidden>
+                <div class="panel-divider"></div>
+                <div class="profile-overview">
+                  <div class="profile-identity">
+                    <span class="profile-avatar" data-active-initials>--</span>
+                    <div>
+                      <strong data-active-name>-</strong>
+                      <span data-active-meta>-</span>
+                    </div>
+                  </div>
+                  <button class="ghost-button" type="button" data-clear-active-patient>Ganti Pasien</button>
+                </div>
+              </div>
+
             </article>
           </section>
 
@@ -344,9 +302,9 @@
               <span class="metric-trend flat">Total sesi ini</span>
             </article>
             <article class="metric-card">
-              <span class="card-label">CPU / Suhu</span>
-              <strong data-cpu-temp>-</strong>
-              <span class="metric-trend flat">Status perangkat</span>
+              <span class="card-label">Durasi Sesi</span>
+              <strong data-session-duration>00:00:00</strong>
+              <span class="metric-trend flat">Waktu aktif</span>
             </article>
           </section>
 
@@ -360,20 +318,12 @@
               </div>
               <div class="device-list">
                 <div class="device-row">
-                  <span class="device-dot idle"></span>
+                  <span class="device-dot idle" data-device-dot-camera></span>
                   <div>
                     <strong>Kamera</strong>
                     <small>Feed kamera eye-tracking</small>
                   </div>
                   <span class="device-value" data-camera-status-ops>Offline</span>
-                </div>
-                <div class="device-row">
-                  <span class="device-dot idle"></span>
-                  <div>
-                    <strong>Waktu Alert Terakhir</strong>
-                    <small>Alert sistem monitoring</small>
-                  </div>
-                  <span class="device-value" data-alert-time>-</span>
                 </div>
                 <div class="device-row">
                   <span class="device-dot idle"></span>
@@ -393,12 +343,7 @@
                 </div>
                 <span class="status-badge info" data-alert-count>0</span>
               </div>
-              <div class="alert-list">
-                <div class="alert-row low">
-                  <strong>Sistem berjalan normal</strong>
-                  <span>Tidak ada alert yang memerlukan perhatian.</span>
-                </div>
-              </div>
+              <div class="alert-list" data-alert-list></div>
             </article>
           </section>
 
