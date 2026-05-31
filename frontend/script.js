@@ -1,3 +1,23 @@
+// Polyfill untuk String.prototype.replaceAll untuk kompatibilitas Edge/Browser lama
+if (!String.prototype.replaceAll) {
+  String.prototype.replaceAll = function(search, replace) {
+    if (typeof search === 'string') {
+      return this.split(search).join(replace);
+    }
+    let target = this;
+    let regex;
+    if (search instanceof RegExp) {
+      if (!search.global) {
+        throw new TypeError('replaceAll called with a non-global RegExp argument');
+      }
+      regex = search;
+    } else {
+      regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+    }
+    return target.replace(regex, replace);
+  };
+}
+
 const sidebar = document.querySelector("[data-sidebar]");
 const menuButton = document.querySelector("[data-menu-button]");
 const navLinks = Array.from(document.querySelectorAll(".side-nav a"));
@@ -213,12 +233,17 @@ function safeMedian(values) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+  if (typeof value !== 'string') {
+    value = String(value || '');
+  }
+  
+  // Menggunakan metode yang kompatibel dengan browser lama
+  return value
+    .split('&').join('&amp;')
+    .split('<').join('&lt;')
+    .split('>').join('&gt;')
+    .split('"').join('&quot;')
+    .split("'").join('&#039;');
 }
 
 function formatTime(date = new Date()) {
@@ -251,7 +276,7 @@ function formatPoint(point) {
 }
 
 function setText(element, value) {
-  if (!element) {
+  if (!element || typeof element.textContent === 'undefined') {
     return;
   }
 
@@ -300,22 +325,27 @@ function apiUrl(path) {
 }
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(apiUrl(path), {
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    keepalive: Boolean(options.keepalive),
-  });
+  try {
+    const response = await fetch(apiUrl(path), {
+      method: options.method || "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      keepalive: Boolean(options.keepalive),
+    });
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || `Request backend gagal (${response.status})`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Request backend gagal (${response.status})`);
+    }
+
+    return payload;
+  } catch (error) {
+    console.error('API request error:', path, error);
+    throw error;
   }
-
-  return payload;
 }
 
 function reportBackendError(error) {
@@ -1379,8 +1409,12 @@ async function startCamera() {
       width: 640,
       height: 480,
       onFrame: async () => {
-        state.lastInferenceStartedAt = performance.now();
-        await faceMesh.send({ image: video });
+        try {
+          state.lastInferenceStartedAt = performance.now();
+          await faceMesh.send({ image: video });
+        } catch (error) {
+          console.error('Error in camera frame processing:', error);
+        }
       },
     });
 
@@ -1391,7 +1425,8 @@ async function startCamera() {
     addLog("Tracking", "Kamera asli aktif dengan FaceMesh", "ok");
   } catch (error) {
     state.cameraStarting = false;
-    setOverlay("Kamera gagal aktif", "Buka halaman dari localhost/HTTPS dan pastikan izin kamera diberikan.", true);
+    console.error('Camera error:', error);
+    setOverlay("Kamera gagal aktif", "Buka halaman dari localhost/HTTPS dan pastikan izin kamera diberikan. Error: " + (error.message || error), true);
     addLog("Tracking", `Kamera gagal aktif: ${error.message || "izin ditolak"}`, "warn");
   }
 }
@@ -1665,114 +1700,148 @@ navLinks.forEach((link) => {
   });
 });
 
-document.querySelectorAll("[data-command]").forEach((button) => {
-  button.addEventListener("click", () => {
-    setMessage(button.dataset.command, "Input manual");
+// Safely add event listeners with null checks
+try {
+  document.querySelectorAll("[data-command]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setMessage(button.dataset.command, "Input manual");
+    });
   });
-});
 
-const clearMessageButton = document.querySelector("[data-clear-message]");
-if (clearMessageButton) {
-  clearMessageButton.addEventListener("click", () => {
-    setMessage("Menunggu input pasien", "Output");
-  });
+  const clearMessageButton = document.querySelector("[data-clear-message]");
+  if (clearMessageButton) {
+    clearMessageButton.addEventListener("click", () => {
+      setMessage("Menunggu input pasien", "Output");
+    });
+  }
+
+  const calibrateButton = document.querySelector("[data-calibrate]");
+  if (calibrateButton) {
+    calibrateButton.addEventListener("click", () => {
+      // Protect against accidental reset when patient profile is active
+      if (state.backend.activePatient && state.backend.calibrationSaved) {
+        const confirmed = confirm(
+          `Anda yakin ingin mulai kalibrasi baru untuk ${state.backend.activePatient.name}?\n\n` +
+          `Ini akan menghapus kalibrasi tersimpan saat ini.`
+        );
+        if (!confirmed) {
+          return;
+        }
+        // Clear active patient when resetting calibration
+        setActivePatient(null, false);
+      }
+      
+      resetCalibration("Kalibrasi diulang. Tekan B, C, atau T.");
+      startCamera();
+      addLog("Kalibrasi", "Mode kalibrasi aktif", "ok");
+    });
+  }
+} catch (error) {
+  console.error('Error setting up event listeners:', error);
 }
 
-document.querySelector("[data-calibrate]").addEventListener("click", () => {
-  // Protect against accidental reset when patient profile is active
-  if (state.backend.activePatient && state.backend.calibrationSaved) {
-    const confirmed = confirm(
-      `Anda yakin ingin mulai kalibrasi baru untuk ${state.backend.activePatient.name}?\n\n` +
-      `Ini akan menghapus kalibrasi tersimpan saat ini.`
-    );
-    if (!confirmed) {
-      return;
-    }
-    // Clear active patient when resetting calibration
-    setActivePatient(null, false);
-  }
-  
-  resetCalibration("Kalibrasi diulang. Tekan B, C, atau T.");
-  startCamera();
-  addLog("Kalibrasi", "Mode kalibrasi aktif", "ok");
-});
-
-document.querySelectorAll("[data-calibration-target]").forEach((button) => {
-  button.addEventListener("click", () => {
-    // Protect against accidental calibration when patient profile is active
-    if (state.backend.activePatient && state.backend.calibrationSaved && state.mode === "running") {
-      const confirmed = confirm(
-        `Profil ${state.backend.activePatient.name} sedang aktif.\n\n` +
-        `Mulai kalibrasi baru akan menghapus profil aktif saat ini. Lanjutkan?`
-      );
-      if (!confirmed) {
-        return;
+// Safely add calibration and program listeners
+try {
+  document.querySelectorAll("[data-calibration-target]").forEach((button) => {
+    button.addEventListener("click", () => {
+      // Protect against accidental calibration when patient profile is active
+      if (state.backend.activePatient && state.backend.calibrationSaved && state.mode === "running") {
+        const confirmed = confirm(
+          `Profil ${state.backend.activePatient.name} sedang aktif.\n\n` +
+          `Mulai kalibrasi baru akan menghapus profil aktif saat ini. Lanjutkan?`
+        );
+        if (!confirmed) {
+          return;
+        }
+        // Clear active patient when starting new calibration
+        setActivePatient(null, false);
       }
-      // Clear active patient when starting new calibration
-      setActivePatient(null, false);
-    }
-    
-    startCalibrationTarget(button.dataset.calibrationTarget);
+      
+      startCalibrationTarget(button.dataset.calibrationTarget);
+    });
   });
-});
 
-document.querySelector("[data-start-program]").addEventListener("click", () => {
-  startProgram();
-});
-
-document.querySelector("[data-reset-calibration]").addEventListener("click", () => {
-  // Protect against accidental reset when patient profile is active
-  if (state.backend.activePatient && state.backend.calibrationSaved) {
-    const confirmed = confirm(
-      `Anda yakin ingin ulang kalibrasi untuk ${state.backend.activePatient.name}?\n\n` +
-      `Ini akan menghapus kalibrasi tersimpan dan memasuki mode kalibrasi baru.`
-    );
-    if (!confirmed) {
-      return;
-    }
-    // Clear active patient when resetting calibration
-    setActivePatient(null, false);
+  const startProgramButton = document.querySelector("[data-start-program]");
+  if (startProgramButton) {
+    startProgramButton.addEventListener("click", () => {
+      startProgram();
+    });
   }
-  
-  resetCalibration();
-  startCamera();
-  addLog("Kalibrasi", "Kalibrasi diulang", "ok");
-});
 
-elements.startCamera.addEventListener("click", () => {
-  startCamera();
-});
+  const resetCalibrationButton = document.querySelector("[data-reset-calibration]");
+  if (resetCalibrationButton) {
+    resetCalibrationButton.addEventListener("click", () => {
+      // Protect against accidental reset when patient profile is active
+      if (state.backend.activePatient && state.backend.calibrationSaved) {
+        const confirmed = confirm(
+          `Anda yakin ingin ulang kalibrasi untuk ${state.backend.activePatient.name}?\n\n` +
+          `Ini akan menghapus kalibrasi tersimpan dan memasuki mode kalibrasi baru.`
+        );
+        if (!confirmed) {
+          return;
+        }
+        // Clear active patient when resetting calibration
+        setActivePatient(null, false);
+      }
+      
+      resetCalibration();
+      startCamera();
+      addLog("Kalibrasi", "Kalibrasi diulang", "ok");
+    });
+  }
 
-cameraFullscreenButton.addEventListener("click", () => {
-  toggleCameraFullscreen();
-});
+  if (elements.startCamera) {
+    elements.startCamera.addEventListener("click", () => {
+      startCamera();
+    });
+  }
+
+  if (cameraFullscreenButton) {
+    cameraFullscreenButton.addEventListener("click", () => {
+      toggleCameraFullscreen();
+    });
+  }
+} catch (error) {
+  console.error('Error setting up calibration and camera listeners:', error);
+}
 
 document.addEventListener("fullscreenchange", handleCameraFullscreenChange);
 
-elements.patientSearchInput.addEventListener("focus", () => {
-  searchPatients(elements.patientSearchInput.value);
-});
+// Safely add patient search listeners
+try {
+  if (elements.patientSearchInput) {
+    elements.patientSearchInput.addEventListener("focus", () => {
+      searchPatients(elements.patientSearchInput.value);
+    });
 
-elements.patientSearchInput.addEventListener("input", schedulePatientSearch);
-
-elements.patientSearchResults.addEventListener("click", (event) => {
-  const target = event.target instanceof Element ? event.target : event.target.parentElement;
-  const button = target ? target.closest("[data-patient-id]") : null;
-  if (!button) {
-    return;
+    elements.patientSearchInput.addEventListener("input", schedulePatientSearch);
   }
 
-  loadPatientProfile(button.dataset.patientId);
-});
+  if (elements.patientSearchResults) {
+    elements.patientSearchResults.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : event.target.parentElement;
+      const button = target ? target.closest("[data-patient-id]") : null;
+      if (!button) {
+        return;
+      }
 
-elements.patientProfileForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  savePatientCalibration();
-});
+      loadPatientProfile(button.dataset.patientId);
+    });
+  }
 
-document.querySelectorAll("[data-close-patient-profile]").forEach((button) => {
-  button.addEventListener("click", hidePatientProfileForm);
-});
+  if (elements.patientProfileForm) {
+    elements.patientProfileForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      savePatientCalibration();
+    });
+  }
+
+  document.querySelectorAll("[data-close-patient-profile]").forEach((button) => {
+    button.addEventListener("click", hidePatientProfileForm);
+  });
+} catch (error) {
+  console.error('Error setting up patient search listeners:', error);
+}
 
 window.addEventListener("resize", () => {
   const resized = syncCanvasSize();
@@ -1784,62 +1853,76 @@ window.addEventListener("resize", () => {
 
 window.addEventListener("beforeunload", closeBackendSession);
 
-document.querySelector("[data-toggle-alert]").addEventListener("click", () => {
-  state.muted = !state.muted;
-  addLog("Alert", state.muted ? "Alert disenyapkan" : "Alert diaktifkan kembali", state.muted ? "warn" : "ok");
-  updateDashboard(
-    state.lastFeatures,
-    state.lastDisplayDirection,
-    state.lastProgramDirection,
-    state.lastEyeState,
-    state.lastConfidence
-  );
-});
+// Safely add remaining event listeners
+try {
+  const toggleAlertButton = document.querySelector("[data-toggle-alert]");
+  if (toggleAlertButton) {
+    toggleAlertButton.addEventListener("click", () => {
+      state.muted = !state.muted;
+      addLog("Alert", state.muted ? "Alert disenyapkan" : "Alert diaktifkan kembali", state.muted ? "warn" : "ok");
+      updateDashboard(
+        state.lastFeatures,
+        state.lastDisplayDirection,
+        state.lastProgramDirection,
+        state.lastEyeState,
+        state.lastConfidence
+      );
+    });
+  }
 
-const refreshDeviceButton = document.querySelector("[data-refresh-device]");
-if (refreshDeviceButton) {
-  refreshDeviceButton.addEventListener("click", () => {
-    addLog("Perangkat", "Status perangkat diperbarui", "ok");
+  const refreshDeviceButton = document.querySelector("[data-refresh-device]");
+  if (refreshDeviceButton) {
+    refreshDeviceButton.addEventListener("click", () => {
+      addLog("Perangkat", "Status perangkat diperbarui", "ok");
+    });
+  }
+
+  const exportLogButton = document.querySelector("[data-export-log]");
+  if (exportLogButton) {
+    exportLogButton.addEventListener("click", () => {
+      addLog("Log", "Riwayat sesi disiapkan untuk export", "ok");
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    const key = event.key.toLowerCase();
+
+    if (key === "escape" && state.fallbackFullscreen) {
+      exitCameraFullscreen();
+      return;
+    }
+
+    if (TARGET_BY_KEY[key]) {
+      startCalibrationTarget(TARGET_BY_KEY[key]);
+      return;
+    }
+
+    if (key === "s") {
+      startProgram();
+      return;
+    }
+
+    if (key === "r") {
+      resetCalibration();
+      addLog("Kalibrasi", "Kalibrasi diulang", "ok");
+    }
   });
+} catch (error) {
+  console.error('Error setting up remaining event listeners:', error);
 }
 
-const exportLogButton = document.querySelector("[data-export-log]");
-if (exportLogButton) {
-  exportLogButton.addEventListener("click", () => {
-    addLog("Log", "Riwayat sesi disiapkan untuk export", "ok");
-  });
+// Initialize aplikasi dengan error handling
+try {
+  renderLogs();
+  syncClock();
+  drawIdleView();
+  updateCalibrationBanner();
+  updateDashboard(null, "-", "-", "WAJAH TIDAK TERBACA", 0);
+  renderActivePatientProfile();
+  searchPatients();
+
+  setInterval(syncClock, 1000);
+} catch (error) {
+  console.error('Error initializing application:', error);
+  addLog('System', 'Error initializing app: ' + error.message, 'warn');
 }
-
-document.addEventListener("keydown", (event) => {
-  const key = event.key.toLowerCase();
-
-  if (key === "escape" && state.fallbackFullscreen) {
-    exitCameraFullscreen();
-    return;
-  }
-
-  if (TARGET_BY_KEY[key]) {
-    startCalibrationTarget(TARGET_BY_KEY[key]);
-    return;
-  }
-
-  if (key === "s") {
-    startProgram();
-    return;
-  }
-
-  if (key === "r") {
-    resetCalibration();
-    addLog("Kalibrasi", "Kalibrasi diulang", "ok");
-  }
-});
-
-renderLogs();
-syncClock();
-drawIdleView();
-updateCalibrationBanner();
-updateDashboard(null, "-", "-", "WAJAH TIDAK TERBACA", 0);
-renderActivePatientProfile();
-searchPatients();
-
-setInterval(syncClock, 1000);
